@@ -9,6 +9,13 @@ if ($TargetPath) {
 }
 
 $trayLauncher = Join-Path $PSScriptRoot "GGF-Tray.bat"
-if (Test-Path $trayLauncher) {
+$rootPath = $PSScriptRoot.ToLowerInvariant()
+$trayRunning = Get-CimInstance Win32_Process -Filter "Name='pythonw.exe' OR Name='python.exe'" |
+    Where-Object {
+        $cmd = ($_.CommandLine -replace "\\\\", "\").ToLowerInvariant()
+        $cmd.Contains("ggf-tray.py") -and $cmd.Contains($rootPath)
+    }
+
+if (-not $trayRunning -and (Test-Path $trayLauncher)) {
     Start-Process -FilePath $trayLauncher -WorkingDirectory $PSScriptRoot
 }
