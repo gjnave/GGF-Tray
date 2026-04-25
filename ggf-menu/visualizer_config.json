@@ -9,5 +9,7 @@
   "emitterGlowSize": 5,
   "selectedDeviceIndex": 35,
   "selectedDeviceName": "Speakers (Realtek(R) Audio) [Loopback]",
-  "visualMode": 4
+  "visualMode": 4,
+  "randomBackgrounds": false,
+  "overlayMode": "audio"
 }

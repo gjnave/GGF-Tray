@@ -563,7 +563,6 @@ class SearchDialog(QWidget):
                         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
                     
                     if reply == QMessageBox.StandardButton.Yes:
-                        import subprocess
                         try:
                             subprocess.Popen([save_path], shell=True)
                             QMessageBox.information(self, "Launched", "Script/application started!")

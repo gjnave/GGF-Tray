@@ -2,3 +2,6 @@
 # Format: name=filepath
 
 install-masubi-training-cuda12.8=D:/staging\install-masubi-training-cuda12.8\run-musubi-gui.bat
+ACE-Step1.5-Dev-Edition-Model-Manager=D:/staging\ACE-Step1.5-Dev-Edition-Model-Manager\ACE-Step1.5-Dev-Edition-Model-Manager.bat
+Birefnet-Gradio-Installer=D:/staging\Birefnet-Gradio-Installer\run-birefnet.bat
+fish-tts-installer-win-v1=D:/staging\fish-tts-installer-win-v1\run-fish.bat

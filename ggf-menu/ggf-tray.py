@@ -314,8 +314,9 @@ class GGFTray:
     def refresh_shortcuts(self):
         """Reload shortcuts"""
         self.shortcuts = self.load_shortcuts()
-        # Rebuild menu
-        self.icon.menu = self.create_menu()
+        # Rebuild menu (icon may not be ready yet during install)
+        if self.icon:
+            self.icon.menu = self.create_menu()
     
     def open_menu_for(self, action):
         """Execute operation based on action type - run in thread to avoid blocking"""
@@ -327,7 +328,10 @@ class GGFTray:
             elif action == 'delete_app':
                 self.delete_ggf_app()
             elif action == 'quick_launch':
-                self.quick_launch_manager()
+                import threading
+                t = threading.Thread(target=self.quick_launch_manager, daemon=False)
+                t.start()
+                return
             elif action == 'huggingface_browser':
                 self.huggingface_model_browser()
             elif action == 'audio_visualizer':  # ADDED
@@ -904,6 +908,56 @@ class GGFTray:
                     if custom_installer:
                         install_bat = custom_installer
             
+            # FALLBACK: if no named installer/launcher found, collect all .bat/.exe files and ask user
+            if not installer_files and not launcher_files:
+                all_bats = []
+                for root_dir, dirs, files in os.walk(install_dir):
+                    for file in files:
+                        if file.endswith('.bat') or file.endswith('.exe'):
+                            if 'uninstall' not in file.lower():
+                                all_bats.append(os.path.join(root_dir, file))
+                
+                if all_bats:
+                    fallback_root = tk.Tk()
+                    fallback_root.withdraw()
+                    fallback_root.attributes('-topmost', True)
+                    
+                    if len(all_bats) == 1:
+                        sole_file = all_bats[0]
+                        sole_name = os.path.basename(sole_file)
+                        # Ask if it's an installer
+                        if messagebox.askyesno("Run Installer?",
+                            f"Found: {sole_name}\n\nRun this as the installer?",
+                            parent=fallback_root):
+                            install_bat = sole_file
+                        # Ask if it should also be the launcher shortcut
+                        if messagebox.askyesno("Add to Quick Launch?",
+                            f"Add '{sole_name}' to Quick Launch shortcuts?",
+                            parent=fallback_root):
+                            run_bat = sole_file
+                    else:
+                        # Multiple unlabeled bats — show numbered list, ask user to pick installer
+                        file_list = "\n".join(f"{i+1}. {os.path.basename(f)}" for i, f in enumerate(all_bats))
+                        choice = simpledialog.askstring("Select Installer",
+                            f"No installer/launcher detected by name.\n\nFound these files:\n{file_list}\n\n"
+                            f"Enter number to run as installer (or leave blank to skip):",
+                            parent=fallback_root)
+                        if choice and choice.isdigit():
+                            idx = int(choice) - 1
+                            if 0 <= idx < len(all_bats):
+                                install_bat = all_bats[idx]
+                        
+                        choice2 = simpledialog.askstring("Select Launcher",
+                            f"Found these files:\n{file_list}\n\n"
+                            f"Enter number to add as Quick Launch shortcut (or leave blank to skip):",
+                            parent=fallback_root)
+                        if choice2 and choice2.isdigit():
+                            idx2 = int(choice2) - 1
+                            if 0 <= idx2 < len(all_bats):
+                                run_bat = all_bats[idx2]
+                    
+                    fallback_root.destroy()
+
             # Smart launcher selection (similar logic)
             if launcher_files and not is_comfyui_install:
                 best_launcher = None

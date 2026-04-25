@@ -8,3 +8,7 @@ VibeVoice-Plus-Gradio-Installer=D:/staging\VibeVoice-Plus-Gradio-Installer
 ComfyUI-Manual-Loaded-Cuda12.9-Universal-Install=D:/staging/test\ComfyUI-Manual-Loaded-Cuda12.9-Universal-Install
 
 install-masubi-training-cuda12.8=D:/staging\install-masubi-training-cuda12.8
+ACE-Step1.5-Dev-Edition-Model-Manager=D:/staging\ACE-Step1.5-Dev-Edition-Model-Manager
+ACE-Step1.5-Dev-Edition-Model-Manager=D:/staging/ACE-Step1.5-Dev-Edition-Model-Manager\ACE-Step1.5-Dev-Edition-Model-Manager
+Birefnet-Gradio-Installer=D:/staging\Birefnet-Gradio-Installer
+fish-tts-installer-win-v1=D:/staging\fish-tts-installer-win-v1
