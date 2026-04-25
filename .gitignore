@@ -28,6 +28,7 @@ _logs/
 ggf-menu/_logs/
 .ggf_tray.lock
 .ggf_menu.lock
+ggf-menu/visualizer_state.json
 
 # Local/private auth and machine state
 .env

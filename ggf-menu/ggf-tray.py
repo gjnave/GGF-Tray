@@ -136,7 +136,7 @@ class GGFTray:
             # Trigger initial auth check (will read from cache or browser)
             auth_status = self.auth.get_auth()
             if auth_status:
-                print(f"✓ Logged in as: {auth_status['name']} ({self.auth.format_tier_name()})")
+                print(f"Logged in as: {auth_status['name']} ({self.auth.format_tier_name()})")
             else:
                 print("Not logged in - use 'Login with Patreon' in app search")
         else:
