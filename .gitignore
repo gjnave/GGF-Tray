@@ -40,6 +40,9 @@ ggf-menu/auth_cache.json
 *.ytdl
 *.zip
 
+# Prevent accidentally committing installed apps
+ggf-menu/ACBR_Windows/
+
 # Windows noise
 Thumbs.db
 desktop.ini
