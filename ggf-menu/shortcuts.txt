@@ -1,0 +1,4 @@
+# GGF Quick Launch Shortcuts
+# Format: name=filepath
+
+install-masubi-training-cuda12.8=D:/staging\install-masubi-training-cuda12.8\run-musubi-gui.bat

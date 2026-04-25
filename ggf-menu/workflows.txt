@@ -1,0 +1,4 @@
+# ComfyUI Workflows
+# Format: name=filepath
+# Example: My Workflow=D:\staging\Comfy\workflows\ltx-2\video_ltx2_t2v.json
+My Workflow=D:\staging\Comfy\workflows\ltx-2\video_ltx2_t2v.json

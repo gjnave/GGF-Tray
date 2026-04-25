@@ -1,0 +1,10 @@
+# GGF Installed Apps
+# Format: name=install_dir|run_bat
+F5-TTS-Plus-Installer-Script_v5=D:/staging\F5-TTS-Plus-Installer-Script_v5
+Acestep-Installers=D:/staging\Acestep-Installers
+kokoro-tts-plus-v.04=D:/staging\kokoro-tts-plus-v.04
+JoyCaption-AlphaOne-Windows-Installer=D:/staging\JoyCaption-AlphaOne-Windows-Installer
+VibeVoice-Plus-Gradio-Installer=D:/staging\VibeVoice-Plus-Gradio-Installer
+ComfyUI-Manual-Loaded-Cuda12.9-Universal-Install=D:/staging/test\ComfyUI-Manual-Loaded-Cuda12.9-Universal-Install
+
+install-masubi-training-cuda12.8=D:/staging\install-masubi-training-cuda12.8

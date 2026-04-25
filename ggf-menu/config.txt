@@ -1,0 +1,36 @@
+[General]
+output_suffix = _converted
+skip_comfyui_prompt = false
+hide_to_tray = false
+first_run = false
+
+[Image]
+resize_percent = 50
+resize_max_width = 1920
+convert_formats = jpg,png,webp
+
+[Video]
+video_preset = medium
+video_crf = 23
+video_codec = libx264
+audio_codec = aac
+audio_bitrate = 192k
+shrink_bitrate = 2000k
+shrink_resolution = 1080p
+gif_fps = 10
+gif_scale = 480
+convert_formats = mp4,avi,webm,mkv,mov,gif
+audio_extract_formats = mp3,wav,ogg,aac,flac,m4a
+
+[Transcribe]
+output_formats = txt,srt
+whisper_model = base
+
+[Download]
+yt_dlp_format = bestvideo+bestaudio
+output_template = %(title)s.%(ext)s
+default_download_dir = Downloads
+
+[Paths]
+comfyui_path = D:/staging/Comfy/ComfyUI
+

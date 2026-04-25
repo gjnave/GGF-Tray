@@ -1,0 +1,13 @@
+{
+  "density": 6,
+  "speed": 0.1,
+  "bassSensitivity": 3.1,
+  "colorCycleSpeed": 8,
+  "bassExplosion": 3.4,
+  "sensitivity": 144,
+  "randomMode": false,
+  "emitterGlowSize": 5,
+  "selectedDeviceIndex": 35,
+  "selectedDeviceName": "Speakers (Realtek(R) Audio) [Loopback]",
+  "visualMode": 4
+}

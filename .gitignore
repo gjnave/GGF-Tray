@@ -1,0 +1,44 @@
+# Python caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+whisper_venv/
+ggf-menu/venv/
+ggf-menu/whisper_venv/
+
+# Build artifacts
+build/
+dist/
+buildbackup/
+BACKUP/
+Hold App/
+ggf-menu/build/
+ggf-menu/dist/
+ggf-menu/buildbackup/
+*.spec
+*-backup.py
+* -backup.py
+
+# Logs and runtime state
+*.log
+_logs/
+ggf-menu/_logs/
+.ggf_tray.lock
+.ggf_menu.lock
+
+# Local/private auth and machine state
+.env
+auth_cache.json
+ggf-menu/auth_cache.json
+
+# Partial downloads and packaged artifacts
+*.part
+*.ytdl
+*.zip
+
+# Windows noise
+Thumbs.db
+desktop.ini
