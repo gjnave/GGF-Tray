@@ -6,8 +6,8 @@ if exist ".ggf_tray.lock" del ".ggf_tray.lock"
 if exist ".ggf_menu.lock" del ".ggf_menu.lock"
 
 REM Clear Python cache for fresh load
-del /S /Q __pycache__ 2>nul
-del /S /Q *.pyc 2>nul
+del /S /Q __pycache__ >nul 2>nul
+del /S /Q *.pyc >nul 2>nul
 
 REM Start tray
 REM Use the venv directly (avoid relying on PATH / activation quirks)

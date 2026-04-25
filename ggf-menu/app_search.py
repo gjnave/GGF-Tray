@@ -13,6 +13,7 @@ import tempfile
 import shutil
 import threading
 import time
+import subprocess
 from PyQt6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout,
                              QLineEdit, QComboBox, QListWidget, QLabel, 
                              QPushButton, QListWidgetItem, QProgressBar, QMessageBox)
@@ -511,6 +512,28 @@ class SearchDialog(QWidget):
             zip_filename = os.path.basename(file_path)
             permanent_path = os.path.join(downloads_dir, zip_filename)
             shutil.move(file_path, permanent_path)
+            installer_opened = False
+            try:
+                script_dir = os.path.dirname(os.path.abspath(__file__))
+                tray_script = os.path.join(script_dir, "ggf-tray.py")
+                creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP") else 0
+                subprocess.Popen(
+                    [sys.executable, tray_script, "--install-zip", permanent_path, "--auto-install"],
+                    cwd=script_dir,
+                    creationflags=creationflags
+                )
+                installer_opened = True
+            except Exception as e:
+                QMessageBox.warning(self, "Installer Error",
+                    f"Downloaded: {zip_filename}\n\n" +
+                    f"Saved to: {downloads_dir}\n\n" +
+                    f"Could not open installer:\n{str(e)}")
+            if installer_opened:
+                QMessageBox.information(self, "Download Complete",
+                    f"Downloaded: {zip_filename}\n\n" +
+                    "Opening the GGF installer now.")
+                self.status_label.setText("Download complete - installer opened")
+                return
             
             # Inform user where file was saved and how to install
             QMessageBox.information(self, "Download Complete",

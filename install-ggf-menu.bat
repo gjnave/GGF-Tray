@@ -78,6 +78,21 @@ if exist "%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\GGF Tray.lnk" 
 )
 
 echo.
+echo Adding GGF-Tray to Windows Explorer context menus...
+set "CTX_FILE_CMD=powershell.exe -NoProfile -ExecutionPolicy Bypass -File ^"%~dp0GGF-Context.ps1^" ^"%%1^""
+set "CTX_BG_CMD=powershell.exe -NoProfile -ExecutionPolicy Bypass -File ^"%~dp0GGF-Context.ps1^" ^"%%V^""
+reg add "HKCU\Software\Classes\*\shell\GGF-Tray" /ve /d "GGF-Tray" /f >nul
+reg add "HKCU\Software\Classes\*\shell\GGF-Tray" /v Icon /d "%~dp0ggf-menu\logo.ico" /f >nul
+reg add "HKCU\Software\Classes\*\shell\GGF-Tray\command" /ve /d "%CTX_FILE_CMD%" /f >nul
+reg add "HKCU\Software\Classes\Directory\shell\GGF-Tray" /ve /d "GGF-Tray" /f >nul
+reg add "HKCU\Software\Classes\Directory\shell\GGF-Tray" /v Icon /d "%~dp0ggf-menu\logo.ico" /f >nul
+reg add "HKCU\Software\Classes\Directory\shell\GGF-Tray\command" /ve /d "%CTX_FILE_CMD%" /f >nul
+reg add "HKCU\Software\Classes\Directory\Background\shell\GGF-Tray" /ve /d "GGF-Tray" /f >nul
+reg add "HKCU\Software\Classes\Directory\Background\shell\GGF-Tray" /v Icon /d "%~dp0ggf-menu\logo.ico" /f >nul
+reg add "HKCU\Software\Classes\Directory\Background\shell\GGF-Tray\command" /ve /d "%CTX_BG_CMD%" /f >nul
+echo GGF-Tray context menu installed.
+
+echo.
 echo To start now: Run GGF-Tray.bat
 echo To open menu: Run ggf-menu\GGF.bat
 echo.

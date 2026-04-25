@@ -79,6 +79,7 @@ CONFIG_PATH = os.path.join(SCRIPT_DIR, "config.txt")
 MUTEX_NAME = "Global\\GGF-Tray-Unique-Mutex-87A3F9B2"
 mutex_handle = None
 APP_ID = "audio-v"  # Audio_visualizer.py 
+UTILITY_ARGS = {"--install-zip"}
 
 def check_already_running():
     """Check if another instance is already running using Windows mutex"""
@@ -102,8 +103,8 @@ def check_already_running():
     
     return False
 
-# Check if already running - only for main tray app, not subprocesses
-if __name__ == "__main__":
+# Check if already running - only for main tray app, not utility subprocesses
+if __name__ == "__main__" and not any(arg in UTILITY_ARGS for arg in sys.argv[1:]):
     if check_already_running():
         print("GGF Tray is already running!")
         root = tk.Tk()
@@ -161,6 +162,14 @@ class GGFTray:
             return False
    
 
+    def iter_audio_visualizer_processes(self):
+        visualizer_path = os.path.abspath(os.path.join(SCRIPT_DIR, "audio_visualizer_tray.py")).lower()
+        for proc in psutil.process_iter(['pid', 'cmdline']):
+            cmd = proc.info.get('cmdline') or []
+            cmd_text = " ".join(str(part) for part in cmd).lower()
+            if f"--app-id={APP_ID}" in cmd_text or visualizer_path in cmd_text:
+                yield proc
+
     def start_audio_visualizer(self):
         visualizer_path = os.path.join(SCRIPT_DIR, "audio_visualizer_tray.py")
 
@@ -169,6 +178,15 @@ class GGFTray:
             return
 
         try:
+            if any(True for _ in self.iter_audio_visualizer_processes()):
+                return
+
+            creationflags = 0
+            if hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP"):
+                creationflags |= subprocess.CREATE_NEW_PROCESS_GROUP
+            if hasattr(subprocess, "DETACHED_PROCESS"):
+                creationflags |= subprocess.DETACHED_PROCESS
+
             if getattr(sys, 'frozen', False):
                 # Running from PyInstaller - use system Python
                 import shutil
@@ -178,22 +196,19 @@ class GGFTray:
                         "Python not found on system.\n\nPlease install Python to use this feature.", 
                         "error")
                     return
-                subprocess.Popen([python_exe, visualizer_path, f"--app-id={APP_ID}"], close_fds=True)
+                subprocess.Popen([python_exe, visualizer_path, f"--app-id={APP_ID}"], cwd=SCRIPT_DIR, close_fds=True, creationflags=creationflags)
             else:
                 # Running as script
-                subprocess.Popen([sys.executable, visualizer_path, f"--app-id={APP_ID}"], close_fds=True)
+                subprocess.Popen([sys.executable, visualizer_path, f"--app-id={APP_ID}"], cwd=SCRIPT_DIR, close_fds=True, creationflags=creationflags)
         except Exception as e:
             self.show_message("Error", f"Failed to start visualizer:\n{str(e)}", "error")
 
     def close_audio_visualizer(self):
-        APP_ID = "audio-v"
-        for p in psutil.process_iter(['pid','cmdline']):
-            cmd = p.info['cmdline'] or []
-            if any(f"--app-id={APP_ID}" in x for x in cmd):
-                try:
-                    p.kill()
-                except:
-                    pass
+        for proc in self.iter_audio_visualizer_processes():
+            try:
+                proc.kill()
+            except:
+                pass
 
 
     def get_visualizer_state(self):
@@ -723,7 +738,7 @@ class GGFTray:
         except Exception as e:
             self.show_message("Error", f"Failed to save last frame:\n{str(e)}", "error")
     
-    def install_ggf_app(self, zip_path=None):
+    def install_ggf_app(self, zip_path=None, auto_confirm=False):
         """Install a GGF app from zip file"""
         import tkinter as tk
         from tkinter import filedialog, simpledialog, messagebox
@@ -867,7 +882,7 @@ class GGFTray:
                 
                 # Ask user if this is the right installer
                 installer_name = os.path.basename(best_installer)
-                if messagebox.askyesno(
+                if auto_confirm or messagebox.askyesno(
                     "Installer Found",
                     f"Found installer: {installer_name}\n\n"
                     f"Is this the correct installer to run?",
@@ -920,7 +935,7 @@ class GGFTray:
                 
                 # Ask user if this is the right launcher to add to shortcuts
                 launcher_name = os.path.basename(best_launcher)
-                if messagebox.askyesno(
+                if auto_confirm or messagebox.askyesno(
                     "Launcher Found",
                     f"Found launcher: {launcher_name}\n\n"
                     f"Add this to Quick Launch shortcuts?",
@@ -1078,7 +1093,12 @@ class GGFTray:
         # Create standalone window
         window = tk.Tk()
         window.title("Quick Launch Manager")
-        window.geometry("500x400")
+        width, height = 500, 400
+        screen_width = window.winfo_screenwidth()
+        screen_height = window.winfo_screenheight()
+        x = max(0, screen_width - width - 10)
+        y = max(0, screen_height - height - 80)
+        window.geometry(f"{width}x{height}+{x}+{y}")
         window.attributes('-topmost', True)
         
         # Set icon if available
@@ -1192,22 +1212,16 @@ class GGFTray:
                 return
                 
             name = listbox.get(selection[0])
-            
-            if messagebox.askyesno("Confirm Delete", 
-                f"Delete shortcut '{name}'?",
-                parent=window):
-                
-                # Remove from file
-                with open(SHORTCUTS_CONFIG, 'r', encoding='utf-8') as f:
-                    lines = f.readlines()
-                with open(SHORTCUTS_CONFIG, 'w', encoding='utf-8') as f:
-                    for line in lines:
-                        if not line.strip().startswith(name + '='):
-                            f.write(line)
-                
-                load_shortcuts_ui()
-                self.refresh_shortcuts()
-                messagebox.showinfo("Deleted", f"Removed shortcut: {name}", parent=window)
+
+            with open(SHORTCUTS_CONFIG, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+            with open(SHORTCUTS_CONFIG, 'w', encoding='utf-8') as f:
+                for line in lines:
+                    if not line.strip().startswith(name + '='):
+                        f.write(line)
+
+            load_shortcuts_ui()
+            self.refresh_shortcuts()
         
         # Create UI
         title = tk.Label(window, text="Quick Launch Shortcuts", font=("Arial", 14, "bold"))
@@ -1400,6 +1414,17 @@ class GGFTray:
         # Track pagination
         current_offset = 0
         all_models = []
+
+        def hf_json(url, timeout=15):
+            request = urllib.request.Request(
+                url,
+                headers={
+                    "User-Agent": "GGF-Tray/1.0",
+                    "Accept": "application/json"
+                }
+            )
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                return json.loads(response.read().decode())
         
         def search_huggingface(load_more=False):
             """Search HuggingFace for models"""
@@ -1435,9 +1460,7 @@ class GGFTray:
                 # Use current_offset as limit to get all results up to that point
                 urlcode = urllib.parse.urlencode({"search": search_query, "limit": current_offset})
                 url = f"https://huggingface.co/api/models?{urlcode}"
-                
-                with urllib.request.urlopen(url, timeout=10) as response:
-                    results = json.loads(response.read().decode())
+                results = hf_json(url, timeout=15)
                 
                 initial_models = [m["id"] for m in results] if results else []
                 
@@ -1445,9 +1468,7 @@ class GGFTray:
                 if len(initial_models) <= 3:
                     urlcode2 = urllib.parse.urlencode({"search": query, "limit": 15})
                     url2 = f"https://huggingface.co/api/models?{urlcode2}"
-                    
-                    with urllib.request.urlopen(url2, timeout=10) as response:
-                        results2 = json.loads(response.read().decode())
+                    results2 = hf_json(url2, timeout=15)
                     
                     if results2:
                         for m in results2:
@@ -1468,9 +1489,9 @@ class GGFTray:
                     for i, model_id in enumerate(initial_models):
                         try:
                             # Check if model has files of the selected type
-                            url = f"https://huggingface.co/api/models/{model_id}/tree/main?recursive=true"
-                            with urllib.request.urlopen(url, timeout=5) as response:
-                                file_tree = json.loads(response.read().decode())
+                            encoded_model_id = urllib.parse.quote(model_id, safe='/')
+                            url = f"https://huggingface.co/api/models/{encoded_model_id}/tree/main?recursive=true"
+                            file_tree = hf_json(url, timeout=8)
                             
                             # Check if any file matches the filter
                             has_file_type = False
@@ -1567,9 +1588,9 @@ class GGFTray:
                 status_label.config(text="Loading files...")
                 window.update()
                 
-                url = f"https://huggingface.co/api/models/{model_id}/tree/main?recursive=true"
-                with urllib.request.urlopen(url, timeout=10) as response:
-                    file_tree = json.loads(response.read().decode())
+                encoded_model_id = urllib.parse.quote(model_id, safe='/')
+                url = f"https://huggingface.co/api/models/{encoded_model_id}/tree/main?recursive=true"
+                file_tree = hf_json(url, timeout=15)
                 
                 searched_files = []
                 searched_sizes = []
@@ -1585,7 +1606,7 @@ class GGFTray:
                             if "-of-0" in item["path"] and "00001" not in item["path"]:
                                 continue
                             searched_files.append(item["path"])
-                            searched_sizes.append(item["size"])
+                            searched_sizes.append(item.get("size", 0))
                 
                 if not searched_files:
                     status_label.config(text="No model files found")
@@ -1740,7 +1761,9 @@ class GGFTray:
             def do_download():
                 nonlocal downloading
                 try:
-                    url = f"https://huggingface.co/{model_id}/resolve/main/{filename}"
+                    encoded_model_id = urllib.parse.quote(model_id, safe='/')
+                    encoded_filename = urllib.parse.quote(filename, safe='/')
+                    url = f"https://huggingface.co/{encoded_model_id}/resolve/main/{encoded_filename}?download=true"
                     
                     status_label.config(text="Downloading...")
                     progress_bar['value'] = 0
@@ -1754,7 +1777,18 @@ class GGFTray:
                             status_label.config(text=f"Downloading... {percent}%")
                             window.update()
                     
-                    urllib.request.urlretrieve(url, output_file, reporthook)
+                    request = urllib.request.Request(url, headers={"User-Agent": "GGF-Tray/1.0"})
+                    with urllib.request.urlopen(request, timeout=30) as response, open(output_file, 'wb') as out_file:
+                        total_size = int(response.headers.get('Content-Length') or 0)
+                        block_size = 1024 * 1024
+                        count = 0
+                        while True:
+                            chunk = response.read(block_size)
+                            if not chunk:
+                                break
+                            out_file.write(chunk)
+                            count += 1
+                            reporthook(count, block_size, total_size)
                     
                     progress_bar['value'] = 100
                     status_label.config(text="Download complete!")
@@ -2014,5 +2048,17 @@ class GGFTray:
         self.icon.run()
 
 if __name__ == "__main__":
-    app = GGFTray()
-    app.run()
+    if "--install-zip" in sys.argv:
+        try:
+            zip_arg_index = sys.argv.index("--install-zip") + 1
+            zip_path = sys.argv[zip_arg_index]
+        except (ValueError, IndexError):
+            messagebox.showerror("Installer Error", "Missing ZIP path for installer.")
+            sys.exit(1)
+
+        auto_confirm = "--auto-install" in sys.argv
+        app = GGFTray()
+        app.install_ggf_app(zip_path=zip_path, auto_confirm=auto_confirm)
+    else:
+        app = GGFTray()
+        app.run()

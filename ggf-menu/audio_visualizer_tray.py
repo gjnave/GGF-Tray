@@ -3,14 +3,27 @@ import json
 import os
 import numpy as np
 import math
+import subprocess
+import time
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, 
                              QVBoxLayout, QLabel, QSlider, QPushButton,
                              QComboBox, QCheckBox)
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QPoint
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 import pyaudiowpatch as pyaudio
 import threading
 import queue
+
+try:
+    import psutil
+except ImportError:
+    psutil = None
+
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+CONFIG_PATH = os.path.join(SCRIPT_DIR, "visualizer_config.json")
+STATE_PATH = os.path.join(SCRIPT_DIR, "visualizer_state.json")
+CLICK_THROUGH_TIMEOUT_MS = 30000
 
 
 class SettingsWindow(QWidget):
@@ -32,7 +45,7 @@ class SettingsWindow(QWidget):
         
     def init_ui(self):
         self.setWindowTitle("Visualizer Settings")
-        self.setFixedWidth(400)
+        self.setFixedWidth(430)
         
         layout = QVBoxLayout()
         
@@ -133,6 +146,20 @@ class SettingsWindow(QWidget):
         self.random_checkbox = QCheckBox("Random Mode (auto-change settings every 3 seconds)")
         self.random_checkbox.setChecked(self.config.get('randomMode', False))
         layout.addWidget(self.random_checkbox)
+
+        self.random_background_checkbox = QCheckBox("Random Visual Backgrounds (cycle visual modes)")
+        self.random_background_checkbox.setChecked(self.config.get('randomBackgrounds', False))
+        layout.addWidget(self.random_background_checkbox)
+
+        layout.addWidget(QLabel("Overlay:"))
+        self.overlay_combo = QComboBox()
+        self.overlay_combo.addItem("Audio Levels", "audio")
+        self.overlay_combo.addItem("System Stats (CPU/GPU/FPS)", "system")
+        self.overlay_combo.addItem("Hidden", "hidden")
+        overlay_mode = self.config.get('overlayMode', 'audio')
+        overlay_index = self.overlay_combo.findData(overlay_mode)
+        self.overlay_combo.setCurrentIndex(overlay_index if overlay_index >= 0 else 0)
+        layout.addWidget(self.overlay_combo)
         
         # Save and close buttons
         save_btn = QPushButton("Save Settings")
@@ -158,11 +185,13 @@ class SettingsWindow(QWidget):
         self.config['bassExplosion'] = self.explosion_slider.value() / 10
         self.config['sensitivity'] = self.sensitivity_slider.value()
         self.config['randomMode'] = self.random_checkbox.isChecked()
+        self.config['randomBackgrounds'] = self.random_background_checkbox.isChecked()
+        self.config['overlayMode'] = self.overlay_combo.currentData()
         
         self.settings_changed.emit(self.config)
         
         try:
-            with open('visualizer_config.json', 'w') as f:
+            with open(CONFIG_PATH, 'w') as f:
                 json.dump(self.config, f, indent=2)
         except Exception as e:
             print(f"Error saving config: {e}")
@@ -188,10 +217,18 @@ class VisualizerWindow(QMainWindow):
         self.selected_device_index = None
         self.device_working = False
         self.audio_data_lock = threading.Lock()
+        self.band_smooth = {'bass': 0.0, 'mid': 0.0, 'treble': 0.0}
+        self.band_peaks = {'bass': 0.05, 'mid': 0.05, 'treble': 0.05}
+        self.system_stats = {'cpu': 0.0, 'gpu': None}
+        self.last_gpu_poll = 0.0
+        self.gpu_available = None
         
         # Click-through mode (controlled from tray via file)
         self.click_through_mode = False
-        self.state_file = 'visualizer_state.json'
+        self.state_file = STATE_PATH
+        self.click_through_timer = QTimer()
+        self.click_through_timer.setSingleShot(True)
+        self.click_through_timer.timeout.connect(self.disable_click_through_timeout)
         
         # Timer to check for commands from tray
         self.state_check_timer = QTimer()
@@ -208,12 +245,18 @@ class VisualizerWindow(QMainWindow):
         self.current_bpm = 120
         
         self.init_ui()
+        self.device_success.connect(lambda message: self.update_device_status(message, "active"))
+        self.device_error.connect(lambda message: self.update_device_status(message, "error"))
         
         QTimer.singleShot(500, self.try_audio_devices_async)
         
         self.update_timer = QTimer()
         self.update_timer.timeout.connect(self.push_audio_data)
         self.update_timer.start(33)
+
+        self.system_stats_timer = QTimer()
+        self.system_stats_timer.timeout.connect(self.push_system_stats)
+        self.system_stats_timer.start(1000)
         
         # Write initial state file
         self.write_state_file()
@@ -283,6 +326,30 @@ class VisualizerWindow(QMainWindow):
         settings_btn.move(width - 80, 10)
         settings_btn.clicked.connect(self.show_settings)
         settings_btn.raise_()
+
+        self.menu_btn = QPushButton("Menu", self)
+        self.menu_btn.setFixedSize(54, 28)
+        self.menu_btn.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(20, 20, 20, 190);
+                color: white;
+                border: 1px solid rgba(255, 255, 255, 80);
+                border-radius: 14px;
+                font-weight: bold;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: rgba(50, 150, 255, 220);
+            }
+        """)
+        self.menu_btn.move(width - 64, height - 40)
+        self.menu_btn.clicked.connect(self.show_controls_popup)
+        self.menu_btn.raise_()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, 'menu_btn'):
+            self.menu_btn.move(self.width() - 64, self.height() - 40)
     
     def show_context_menu(self, pos):
         """Simple right-click menu - main controls are in tray"""
@@ -312,6 +379,61 @@ class VisualizerWindow(QMainWindow):
         # Toggle internal state
         new_state = not self.click_through_mode
         self.toggle_click_through(new_state)
+
+    def build_controls_menu(self):
+        from PyQt6.QtWidgets import QMenu
+        menu = QMenu(self)
+
+        mode_menu = menu.addMenu("Visual Mode")
+        mode_names = ["Spark Fountain", "Radial Burst", "Equalizer Bars", "Spiral Vortex", "Traveling Wave", "Flower Bloom", "Psychedelic Face"]
+        current_mode = self.config.get('visualMode', 0)
+
+        for i, mode_name in enumerate(mode_names):
+            action = mode_menu.addAction(mode_name)
+            if i == current_mode:
+                action.setText(f"* {mode_name}")
+            action.triggered.connect(lambda checked, mode=i: self.switch_visual_mode(mode))
+
+        overlay_menu = menu.addMenu("Overlay")
+        for label, mode in [("Audio Levels", "audio"), ("System Stats", "system"), ("Hidden", "hidden")]:
+            action = overlay_menu.addAction(label)
+            if self.config.get('overlayMode', 'audio') == mode:
+                action.setText(f"* {label}")
+            action.triggered.connect(lambda checked, selected=mode: self.set_overlay_mode(selected))
+
+        menu.addSeparator()
+
+        click_label = "Click Through (30 sec)" if not self.click_through_mode else "Click Through On"
+        click_through = menu.addAction(click_label)
+        click_through.triggered.connect(self.menu_toggle_click_through)
+
+        random_action = menu.addAction(
+            "Random Settings On" if self.config.get('randomMode', False) else "Random Settings Off"
+        )
+        random_action.triggered.connect(self.toggle_random_mode)
+
+        background_action = menu.addAction(
+            "Random Backgrounds On" if self.config.get('randomBackgrounds', False) else "Random Backgrounds Off"
+        )
+        background_action.triggered.connect(self.toggle_random_backgrounds)
+
+        refresh_action = menu.addAction("Refresh Visualizer")
+        refresh_action.triggered.connect(self.load_visualizer)
+
+        menu.addSeparator()
+
+        settings_action = menu.addAction("Settings")
+        settings_action.triggered.connect(self.show_settings)
+
+        close_action = menu.addAction("Close Visualizer")
+        close_action.triggered.connect(self.close)
+
+        return menu
+
+    def show_controls_popup(self):
+        menu = self.build_controls_menu()
+        menu_pos = self.menu_btn.mapToGlobal(QPoint(0, -menu.sizeHint().height()))
+        menu.exec(menu_pos)
     
     def show_context_menu(self, pos):
         from PyQt6.QtWidgets import QMenu
@@ -359,7 +481,7 @@ class VisualizerWindow(QMainWindow):
         self.config['visualMode'] = mode_index
         
         try:
-            with open('visualizer_config.json', 'w') as f:
+            with open(CONFIG_PATH, 'w') as f:
                 json.dump(self.config, f, indent=2)
         except Exception as e:
             print(f"Error saving mode: {e}")
@@ -392,6 +514,7 @@ class VisualizerWindow(QMainWindow):
     
     def toggle_random_mode(self):
         self.config['randomMode'] = not self.config.get('randomMode', False)
+        self.save_config()
         if self.js_ready:
             config_json = json.dumps(self.config)
             self.web_view.page().runJavaScript(f"window.updateSettings({config_json})")
@@ -399,6 +522,29 @@ class VisualizerWindow(QMainWindow):
         
         # Update state file
         self.write_state_file()
+
+    def toggle_random_backgrounds(self):
+        self.config['randomBackgrounds'] = not self.config.get('randomBackgrounds', False)
+        self.save_config()
+        if self.js_ready:
+            config_json = json.dumps(self.config)
+            self.web_view.page().runJavaScript(f"window.updateSettings({config_json})")
+        print(f"Random backgrounds: {'ON' if self.config['randomBackgrounds'] else 'OFF'}")
+        self.write_state_file()
+
+    def set_overlay_mode(self, mode):
+        self.config['overlayMode'] = mode
+        self.save_config()
+        if self.js_ready:
+            config_json = json.dumps(self.config)
+            self.web_view.page().runJavaScript(f"window.updateSettings({config_json})")
+
+    def save_config(self):
+        try:
+            with open(CONFIG_PATH, 'w') as f:
+                json.dump(self.config, f, indent=2)
+        except Exception as e:
+            print(f"Error saving config: {e}")
     
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
@@ -485,6 +631,9 @@ setTimeout(resizeCanvas, 100);
 
 let settings = """ + config_json + """;
 let audioData = {bass: 0, mid: 0, treble: 0, overall: 0, rms: 0, bpm: 120};
+let systemStats = {cpu: 0, gpu: null, fps: 0};
+let lastFpsTime = performance.now();
+let frameCounter = 0;
 
 window.updateSettings = function(newSettings) {
     settings = newSettings;
@@ -494,6 +643,7 @@ window.updateSettings = function(newSettings) {
     psychedelicParticles = [];  // FOR PSYCHEDELIC FACE ONLY
     flowerParticles = [];       // FOR FLOWER BLOOM ONLY
     wavePoints = initWaveArray();
+    applyOverlayMode();
 };
 
 window.updateAudio = function(data) {
@@ -502,7 +652,9 @@ window.updateAudio = function(data) {
     const midPercent = Math.min(100, data.mid * 100);
     const treblePercent = Math.min(100, data.treble * 100);
     
-    document.getElementById('bassBar').style.width = bassPercent + '%';
+    const bassBar = document.getElementById('bassBar');
+    if (!bassBar) return;
+    bassBar.style.width = bassPercent + '%';
     document.getElementById('midBar').style.width = midPercent + '%';
     document.getElementById('trebleBar').style.width = treblePercent + '%';
     
@@ -514,8 +666,42 @@ window.updateAudio = function(data) {
 window.visualizerReady = true;
 window.updateDeviceStatus = function(message, status) {
     const statusEl = document.getElementById('deviceStatus');
+    if (!message) {
+        statusEl.style.display = 'none';
+        return;
+    }
     statusEl.textContent = message;
     statusEl.className = status;
+    statusEl.style.display = 'block';
+    if (window.deviceStatusTimer) clearTimeout(window.deviceStatusTimer);
+    if (status === 'active') {
+        window.deviceStatusTimer = setTimeout(() => {
+            statusEl.style.display = 'none';
+        }, 4000);
+    }
+};
+
+window.updateSystemStats = function(data) {
+    systemStats = data;
+    const cpuValue = document.getElementById('cpuValue');
+    if (!cpuValue) return;
+    const cpu = Number(data.cpu || 0);
+    const gpu = data.gpu === null || data.gpu === undefined ? null : Number(data.gpu);
+    document.getElementById('cpuBar').style.width = Math.min(100, cpu) + '%';
+    document.getElementById('gpuBar').style.width = (gpu === null ? 0 : Math.min(100, gpu)) + '%';
+    cpuValue.textContent = cpu.toFixed(0) + '%';
+    document.getElementById('gpuValue').textContent = gpu === null ? '--' : gpu.toFixed(0) + '%';
+};
+
+function applyOverlayMode() {
+    const overlay = document.getElementById('audioDebug');
+    const audioPanel = document.getElementById('audioPanel');
+    const systemPanel = document.getElementById('systemPanel');
+    if (!overlay || !audioPanel || !systemPanel) return;
+    const mode = settings.overlayMode || 'audio';
+    overlay.style.display = mode === 'hidden' ? 'none' : 'block';
+    audioPanel.style.display = mode === 'audio' ? 'block' : 'none';
+    systemPanel.style.display = mode === 'system' ? 'block' : 'none';
 };
 
 let clickEffectActive = false;
@@ -1397,6 +1583,33 @@ function animate() {
             window.lastRandomChange = Date.now();
         }
     }
+
+    if (settings.randomBackgrounds) {
+        if (!window.lastBackgroundChange) window.lastBackgroundChange = Date.now();
+        if (Date.now() - window.lastBackgroundChange > 10000) {
+            const currentMode = settings.visualMode || 0;
+            let nextMode = Math.floor(Math.random() * 7);
+            if (nextMode === currentMode) nextMode = (nextMode + 1) % 7;
+            settings.visualMode = nextMode;
+            sparks = [];
+            bars = [];
+            spiralParticles = [];
+            psychedelicParticles = [];
+            flowerParticles = [];
+            wavePoints = initWaveArray();
+            window.lastBackgroundChange = Date.now();
+        }
+    }
+
+    frameCounter++;
+    const now = performance.now();
+    if (now - lastFpsTime >= 500) {
+        systemStats.fps = Math.round(frameCounter * 1000 / (now - lastFpsTime));
+        frameCounter = 0;
+        lastFpsTime = now;
+        const fpsValue = document.getElementById('fpsValue');
+        if (fpsValue) fpsValue.textContent = systemStats.fps;
+    }
     
     const mode = settings.visualMode || 0;
     
@@ -1414,6 +1627,7 @@ function animate() {
     requestAnimationFrame(animate);
 }
 
+applyOverlayMode();
 animate();
 """
         
@@ -1429,13 +1643,15 @@ animate();
             position: absolute; top: 10px; left: 10px;
             background: rgba(0, 0, 0, 0.7); color: #0ff;
             padding: 10px; font-family: monospace; font-size: 11px;
-            border-radius: 5px; pointer-events: none; opacity: 0.8;
+            border-radius: 5px; pointer-events: none; opacity: 0.85;
+            min-width: 185px;
         }}
         #deviceStatus {{
             position: absolute; bottom: 10px; left: 10px;
             background: rgba(0, 0, 0, 0.7); color: #888;
             padding: 8px 12px; font-family: monospace; font-size: 10px;
             border-radius: 5px; pointer-events: none; opacity: 0.8;
+            display: none;
         }}
         #deviceStatus.active {{ color: #0f0; }}
         #deviceStatus.error {{ color: #f00; }}
@@ -1445,31 +1661,49 @@ animate();
             flex: 1; height: 8px; background: #222;
             border-radius: 4px; overflow: hidden; margin-left: 5px;
         }}
-        .debug-fill {{ height: 100%; transition: width 0.05s; min-width: 1px; }}
+        .debug-fill {{ height: 100%; transition: width 0.05s; }}
         .debug-fill.bass {{ background: #f0f; }}
         .debug-fill.mid {{ background: #0ff; }}
         .debug-fill.treble {{ background: #ff0; }}
+        .debug-fill.cpu {{ background: #4CAF50; }}
+        .debug-fill.gpu {{ background: #FF9800; }}
         .debug-value {{ width: 40px; text-align: right; margin-left: 5px; color: #0ff; }}
+        .stat-line {{ display: flex; justify-content: space-between; margin: 3px 0; color: #0ff; }}
     </style>
 </head>
 <body>
     <canvas id="canvas"></canvas>
-    <div id="deviceStatus">Searching for audio device...</div>
+    <div id="deviceStatus"></div>
     <div id="audioDebug">
-        <div class="debug-bar">
-            <span class="debug-label">Bass:</span>
-            <div class="debug-meter"><div class="debug-fill bass" id="bassBar" style="width: 0%"></div></div>
-            <span class="debug-value" id="bassValue">0.00</span>
+        <div id="audioPanel">
+            <div class="debug-bar">
+                <span class="debug-label">Bass:</span>
+                <div class="debug-meter"><div class="debug-fill bass" id="bassBar" style="width: 0%"></div></div>
+                <span class="debug-value" id="bassValue">0.00</span>
+            </div>
+            <div class="debug-bar">
+                <span class="debug-label">Mid:</span>
+                <div class="debug-meter"><div class="debug-fill mid" id="midBar" style="width: 0%"></div></div>
+                <span class="debug-value" id="midValue">0.00</span>
+            </div>
+            <div class="debug-bar">
+                <span class="debug-label">Treble:</span>
+                <div class="debug-meter"><div class="debug-fill treble" id="trebleBar" style="width: 0%"></div></div>
+                <span class="debug-value" id="trebleValue">0.00</span>
+            </div>
         </div>
-        <div class="debug-bar">
-            <span class="debug-label">Mid:</span>
-            <div class="debug-meter"><div class="debug-fill mid" id="midBar" style="width: 0%"></div></div>
-            <span class="debug-value" id="midValue">0.00</span>
-        </div>
-        <div class="debug-bar">
-            <span class="debug-label">Treble:</span>
-            <div class="debug-meter"><div class="debug-fill treble" id="trebleBar" style="width: 0%"></div></div>
-            <span class="debug-value" id="trebleValue">0.00</span>
+        <div id="systemPanel" style="display: none;">
+            <div class="debug-bar">
+                <span class="debug-label">CPU:</span>
+                <div class="debug-meter"><div class="debug-fill cpu" id="cpuBar" style="width: 0%"></div></div>
+                <span class="debug-value" id="cpuValue">0%</span>
+            </div>
+            <div class="debug-bar">
+                <span class="debug-label">GPU:</span>
+                <div class="debug-meter"><div class="debug-fill gpu" id="gpuBar" style="width: 0%"></div></div>
+                <span class="debug-value" id="gpuValue">--</span>
+            </div>
+            <div class="stat-line"><span>FPS:</span><span id="fpsValue">0</span></div>
         </div>
     </div>
     <script>{js_code}</script>
@@ -1546,7 +1780,7 @@ animate();
                 self.config['selectedDeviceIndex'] = device['index']
                 
                 try:
-                    with open('visualizer_config.json', 'w') as f:
+                    with open(CONFIG_PATH, 'w') as f:
                         json.dump(self.config, f, indent=2)
                 except:
                     pass
@@ -1611,13 +1845,70 @@ animate();
         self.config['selectedDeviceIndex'] = device_index
         
         try:
-            with open('visualizer_config.json', 'w') as f:
+            with open(CONFIG_PATH, 'w') as f:
                 json.dump(self.config, f, indent=2)
         except:
             pass
         
         self.start_audio_capture()
         self.device_success.emit(f"Audio device: {device_name}")
+
+    def calculate_audio_levels(self, audio_float, rate):
+        if len(audio_float) < 8:
+            return {'bass': 0.0, 'mid': 0.0, 'treble': 0.0, 'overall': 0.0, 'rms': 0.0, 'bpm': self.current_bpm}
+
+        window = np.hanning(len(audio_float))
+        audio_windowed = audio_float * window
+        magnitudes = np.abs(np.fft.rfft(audio_windowed)) / max(1, len(audio_windowed))
+        freqs = np.fft.rfftfreq(len(audio_windowed), d=1.0 / rate)
+
+        sensitivity_factor = max(0.05, float(self.config.get('sensitivity', 100)) / 100.0)
+        bands = {
+            'bass': (20, 180, 85.0),
+            'mid': (180, 2200, 115.0),
+            'treble': (2200, min(10000, rate / 2), 165.0),
+        }
+
+        rms = float(np.sqrt(np.mean(audio_float ** 2)))
+        rms_db = 20 * math.log10(rms + 1e-10)
+        rms_norm = max(0.0, min(1.0, (rms_db + 55) / 45))
+        noise_gate = min(1.0, rms_norm * 4.0)
+
+        levels = {}
+        for band_name, (low_freq, high_freq, scale) in bands.items():
+            mask = (freqs >= low_freq) & (freqs < high_freq)
+            if not np.any(mask):
+                raw_level = 0.0
+            else:
+                band_energy = float(np.sqrt(np.mean(magnitudes[mask] ** 2)))
+                raw_level = math.log1p(band_energy * scale * sensitivity_factor)
+
+            decayed_peak = max(0.05, self.band_peaks.get(band_name, 0.05) * 0.995)
+            peak = max(decayed_peak, raw_level)
+            self.band_peaks[band_name] = peak
+
+            normalized = max(0.0, min(1.0, raw_level / (peak * 1.12 + 1e-9)))
+            normalized *= noise_gate
+
+            previous = self.band_smooth.get(band_name, 0.0)
+            alpha = 0.55 if normalized > previous else 0.16
+            smoothed = previous + (normalized - previous) * alpha
+            self.band_smooth[band_name] = smoothed
+            levels[band_name] = float(max(0.0, min(1.0, smoothed)))
+
+        overall = max(
+            (levels['bass'] * 1.15 + levels['mid'] + levels['treble'] * 0.9) / 3.05,
+            rms_norm * 0.55
+        )
+
+        return {
+            'bass': levels['bass'],
+            'mid': levels['mid'],
+            'treble': levels['treble'],
+            'overall': float(max(0.0, min(1.0, overall))),
+            'rms': float(rms_norm),
+            'bpm': self.current_bpm
+        }
         
     def audio_capture_thread(self):
         stream = None
@@ -1660,72 +1951,10 @@ animate();
                         audio_int = audio_int.mean(axis=1).astype(np.int16)
                     
                     audio_float = audio_int.astype(np.float32) / 32768.0
-                    window = np.hanning(len(audio_float))
-                    audio_windowed = audio_float * window
-                    
-                    fft = np.fft.rfft(audio_windowed)
-                    magnitude = np.abs(fft)
-                    
-                    if np.max(magnitude) == 0:
-                        continue
-                    
-                    nyquist = RATE / 2
-                    bin_width = nyquist / (len(magnitude) - 1)
-                    
-                    bass_end_bin = int(250 / bin_width) + 1
-                    mid_start_bin = int(250 / bin_width) + 1
-                    mid_end_bin = int(2000 / bin_width) + 1
-                    treble_start_bin = int(2000 / bin_width) + 1
-                    treble_end_bin = min(int(8000 / bin_width) + 1, len(magnitude))
-                    
-                    bass_end_bin = min(max(2, bass_end_bin), len(magnitude))
-                    mid_start_bin = min(mid_start_bin, len(magnitude))
-                    mid_end_bin = min(max(mid_start_bin + 1, mid_end_bin), len(magnitude))
-                    treble_start_bin = min(treble_start_bin, len(magnitude))
-                    treble_end_bin = min(max(treble_start_bin + 1, treble_end_bin), len(magnitude))
-                    
-                    sensitivity_factor = self.config.get('sensitivity', 100) / 100.0
-                    
-                    bass_energy = np.sum(magnitude[0:bass_end_bin]) if bass_end_bin > 0 else 0
-                    mid_energy = np.sum(magnitude[mid_start_bin:mid_end_bin]) if mid_end_bin > mid_start_bin else 0
-                    treble_energy = np.sum(magnitude[treble_start_bin:treble_end_bin]) if treble_end_bin > treble_start_bin else 0
-                    
-                    bass_scaled = bass_energy * 0.01 * sensitivity_factor
-                    mid_scaled = mid_energy * 0.005 * sensitivity_factor
-                    treble_scaled = treble_energy * 0.003 * sensitivity_factor
-                    
-                    bass_log = math.log10(bass_scaled + 1) * 2
-                    mid_log = math.log10(mid_scaled + 1) * 2
-                    treble_log = math.log10(treble_scaled + 1) * 2
-                    
-                    current_level = (bass_log + mid_log + treble_log) / 3
-                    if current_level > 0:
-                        gain_error = self.gain_target - current_level
-                        self.auto_gain += gain_error * self.gain_adjust_rate
-                        self.auto_gain = max(0.1, min(10.0, self.auto_gain))
-                        
-                        bass_log *= self.auto_gain
-                        mid_log *= self.auto_gain
-                        treble_log *= self.auto_gain
-                    
-                    rms = np.sqrt(np.mean(audio_float**2))
-                    rms_db = 20 * math.log10(rms + 1e-10)
-                    rms_norm = max(0.0, min(1.0, (rms_db + 60) / 40))
-                    
-                    bass_final = float(min(1.0, max(0.0, bass_log)))
-                    mid_final = float(min(1.0, max(0.0, mid_log)))
-                    treble_final = float(min(1.0, max(0.0, treble_log)))
-                    overall_final = (bass_final + mid_final + treble_final) / 3
+                    levels = self.calculate_audio_levels(audio_float, RATE)
                     
                     with self.audio_data_lock:
-                        self.audio_data = {
-                            'bass': bass_final,
-                            'mid': mid_final,
-                            'treble': treble_final,
-                            'overall': overall_final,
-                            'rms': rms_norm,
-                            'bpm': self.current_bpm
-                        }
+                        self.audio_data = levels
                     
                 except Exception as e:
                     if not self.audio_stop_event.is_set():
@@ -1748,8 +1977,55 @@ animate();
     def on_load_finished(self, success):
         if success:
             self.js_ready = True
+            config_json = json.dumps(self.config)
+            self.web_view.page().runJavaScript(f"window.updateSettings({config_json})")
             if self.device_working:
                 self.device_success.emit(f"Audio device connected")
+
+    def update_device_status(self, message, status):
+        if self.js_ready:
+            self.web_view.page().runJavaScript(
+                f"window.updateDeviceStatus({json.dumps(message)}, {json.dumps(status)})"
+            )
+
+    def push_system_stats(self):
+        if psutil is not None:
+            try:
+                self.system_stats['cpu'] = float(psutil.cpu_percent(interval=None))
+            except Exception:
+                self.system_stats['cpu'] = 0.0
+        else:
+            self.system_stats['cpu'] = 0.0
+
+        now = time.time()
+        if self.gpu_available is not False and now - self.last_gpu_poll >= 2.0:
+            self.last_gpu_poll = now
+            try:
+                result = subprocess.run(
+                    [
+                        "nvidia-smi",
+                        "--query-gpu=utilization.gpu",
+                        "--format=csv,noheader,nounits"
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=1.5,
+                    creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
+                )
+                if result.returncode == 0:
+                    first_value = result.stdout.strip().splitlines()[0].strip()
+                    self.system_stats['gpu'] = float(first_value)
+                    self.gpu_available = True
+                else:
+                    self.system_stats['gpu'] = None
+                    self.gpu_available = False
+            except Exception:
+                self.system_stats['gpu'] = None
+                self.gpu_available = False
+
+        if self.js_ready:
+            stats_json = json.dumps(self.system_stats)
+            self.web_view.page().runJavaScript(f"window.updateSystemStats({stats_json})")
             
     def push_audio_data(self):
         if not self.js_ready:
@@ -1810,12 +2086,18 @@ animate();
         if enabled:
             self.setWindowOpacity(0.3)
             flags |= Qt.WindowType.WindowTransparentForInput
+            self.click_through_timer.start(CLICK_THROUGH_TIMEOUT_MS)
         else:
             self.setWindowOpacity(1.0)
+            self.click_through_timer.stop()
         
         self.setWindowFlags(flags)
         self.show()
         self.write_state_file()
+
+    def disable_click_through_timeout(self):
+        if self.click_through_mode:
+            self.toggle_click_through(False)
     
     def get_visual_mode(self):
         """Get current visual mode index"""
@@ -1832,7 +2114,9 @@ animate();
                 'running': True,
                 'click_through': self.click_through_mode,
                 'visual_mode': self.config.get('visualMode', 0),
-                'random_mode': self.config.get('randomMode', False)
+                'random_mode': self.config.get('randomMode', False),
+                'random_backgrounds': self.config.get('randomBackgrounds', False),
+                'overlay_mode': self.config.get('overlayMode', 'audio')
             }
             with open(self.state_file, 'w') as f:
                 json.dump(state, f)
@@ -1872,13 +2156,15 @@ def load_config():
         'bassExplosion': 1.0,
         'sensitivity': 100,
         'randomMode': True,
+        'randomBackgrounds': False,
+        'overlayMode': 'audio',
         'selectedDeviceIndex': None,
         'emitterGlowSize': 3
     }
     
     try:
-        if os.path.exists('visualizer_config.json'):
-            with open('visualizer_config.json', 'r') as f:
+        if os.path.exists(CONFIG_PATH):
+            with open(CONFIG_PATH, 'r') as f:
                 loaded_config = json.load(f)
             
             for key in default_config:
