@@ -1,0 +1,19 @@
+=== app_search started 2026-04-25 17:22:48.354117 ===
+[17:22:58.241] download_selected: slug=joycaptionb1 url=https://getgoingfast.pro/download-api.php?slug=joycaptionb1&token=ggf_tray_lUBFDjgqUHtM-YviZsJRcvrPhJm6lB_r7iIsOUUhVew
+[17:22:58.243] === DownloadWorker.run START slug=joycaptionb1 ===
+[17:22:58.243] download_url = https://getgoingfast.pro/download-api.php?slug=joycaptionb1&token=ggf_tray_lUBFDjgqUHtM-YviZsJRcvrPhJm6lB_r7iIsOUUhVew
+[17:22:58.244] temp_dir = C:\Users\thena\AppData\Local\Temp\tmpbp87h5wb
+[17:22:58.244] Opening URL connection...
+[17:22:58.521] Response status: 200
+[17:22:58.522] Response URL (after redirects): https://getgoingfast.pro/download-api.php?slug=joycaptionb1&token=ggf_tray_lUBFDjgqUHtM-YviZsJRcvrPhJm6lB_r7iIsOUUhVew
+[17:22:58.522] Response headers: {'Content-Type': 'application/zip', 'Transfer-Encoding': 'chunked', 'Connection': 'close', 'X-WS-Origin': 'available', 'X-WS-RateLimit-Limit': '1000', 'X-WS-RateLimit-Remaining': '999', 'Date': 'Sat, 25 Apr 2026 23:22:57 GMT', 'Server': 'Apache', 'Content-Disposition': 'attachment; filename="Joy-Caption-BetaOne-Installer.zip"', 'Cache-Control': 'no-cache, must-revalidate', 'Expires': '0'}
+[17:22:58.522] Content-Disposition: 'attachment; filename="Joy-Caption-BetaOne-Installer.zip"'
+[17:22:58.522] Content-Type: application/zip
+[17:22:58.522] Content-Length: unknown
+[17:22:58.522] Filename from header: Joy-Caption-BetaOne-Installer.zip
+[17:22:58.523] Writing to: C:\Users\thena\AppData\Local\Temp\tmpbp87h5wb\Joy-Caption-BetaOne-Installer.zip
+[17:22:58.524] Download complete. Total bytes written: 2599
+[17:22:58.524] File size on disk: 2599
+[17:22:58.531] First 200 bytes (repr): b'PK\x03\x04\x14\x00\x00\x00\x08\x00\xf0\x01\x98\\.\xb7pP\xba\x02\x00\x00{\x08\x00\x00$\x00\x00\x00joycaption-beta-one-installer-v2.bat\xadUmo\xda0\x10\xfe\x9e_q\xabT\xa9\x95\x9a\x04\xd6iZ\x91&\xad\xa3\xb4c\xd3TDa/Z\xa7\xc9\xd8G\xe25\xb1]\xc7\x81\xd2\x0f\xfb\xed\xbb8Ph\xb7N\xa3\xc0\x07\xcb\xd8w\xcfs\xf7\xdc\xf9\xf2\x06y\xaaA\x8f\xc7\x01\x17\x10\x0b\xd8\xfd%L#\x08\xba\xa7\xd0\xf9\xd2\xbd\x18\xc0\x8e\x90\x05\xcf\x98\xcc\xd1F\xb9\xd8\x81\xbd\x00\x00\x06_{\x9d\x877\xd5\xb9ae\x81\xc1\xfe\xaa;\x1b\xe9\xd2Ej\xacw\xe6^\xcb\x83 h\xb5\xa0\x9di'
+[17:22:58.531] file_ext = .zip
+[17:22:58.531] Emitting finished(True)

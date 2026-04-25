@@ -18,6 +18,27 @@ from PyQt6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout,
                              QLineEdit, QComboBox, QListWidget, QLabel, 
                              QPushButton, QListWidgetItem, QProgressBar, QMessageBox)
 from PyQt6.QtCore import Qt, QTimer, QUrl, QThread, pyqtSignal
+
+# --- Logging ---
+import datetime
+_LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'app_search_log.txt')
+def _log(msg):
+    ts = datetime.datetime.now().strftime('%H:%M:%S.%f')[:-3]
+    line = f"[{ts}] {msg}"
+    print(line)
+    try:
+        with open(_LOG_FILE, 'a', encoding='utf-8') as _f:
+            _f.write(line + '\n')
+    except:
+        pass
+
+# Clear log on startup
+try:
+    with open(_LOG_FILE, 'w', encoding='utf-8') as _f:
+        _f.write(f"=== app_search started {datetime.datetime.now()} ===\n")
+except:
+    pass
+
 from PyQt6.QtGui import QDesktopServices
 
 # Import auth manager
@@ -44,42 +65,84 @@ class DownloadWorker(QThread):
         self.tool_slug = tool_slug
     
     def run(self):
+        _log(f"=== DownloadWorker.run START slug={self.tool_slug} ===")
+        _log(f"download_url = {self.download_url}")
         try:
-            # Download to temp location
             temp_dir = tempfile.mkdtemp()
-            
-            def reporthook(count, block_size, total_size):
-                if total_size > 0:
-                    percent = min(100, int(count * block_size * 100 / total_size))
-                    self.progress.emit(percent, f"Downloading... {percent}%")
-            
+            _log(f"temp_dir = {temp_dir}")
             self.progress.emit(0, "Starting download...")
-            
-            # Download file
-            response = urllib.request.urlopen(self.download_url)
-            
-            # Get actual filename from Content-Disposition header if available
+
+            # Single request - read header AND body from same connection
+            _log("Opening URL connection...")
+            req = urllib.request.Request(self.download_url, headers={'User-Agent': 'GGF-AppSearch/1.0'})
+            response = urllib.request.urlopen(req)
+            _log(f"Response status: {response.status}")
+            _log(f"Response URL (after redirects): {response.url}")
+            _log(f"Response headers: {dict(response.headers)}")
+
             content_disposition = response.headers.get('Content-Disposition', '')
+            content_type = response.headers.get('Content-Type', '')
+            content_length = response.headers.get('Content-Length', 'unknown')
+            _log(f"Content-Disposition: {repr(content_disposition)}")
+            _log(f"Content-Type: {content_type}")
+            _log(f"Content-Length: {content_length}")
+
             if 'filename=' in content_disposition:
-                actual_filename = content_disposition.split('filename=')[1].strip('"')
+                actual_filename = content_disposition.split('filename=')[1].strip('"; ')
+                _log(f"Filename from header: {actual_filename}")
             else:
-                # Fallback to slug + extension guess
                 actual_filename = f"{self.tool_slug}.zip"
-            
+                _log(f"No filename in header, using fallback: {actual_filename} (server should set Content-Disposition)")
+
             file_path = os.path.join(temp_dir, actual_filename)
-            
-            # Download with progress
-            urllib.request.urlretrieve(self.download_url, file_path, reporthook)
-            
-            # Get file extension
+            _log(f"Writing to: {file_path}")
+
+            total_size = int(response.headers.get('Content-Length', 0))
+            downloaded = 0
+            chunk_size = 8192
+            with open(file_path, 'wb') as f:
+                while True:
+                    chunk = response.read(chunk_size)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    if total_size > 0:
+                        pct = min(100, int(downloaded * 100 / total_size))
+                        self.progress.emit(pct, f"Downloading... {pct}%")
+                    else:
+                        kb = downloaded // 1024
+                        self.progress.emit(50, f"Downloading... {kb} KB")
+
+            _log(f"Download complete. Total bytes written: {downloaded}")
+            actual_size = os.path.getsize(file_path)
+            _log(f"File size on disk: {actual_size}")
+
+            # Peek at first bytes to detect if server returned error HTML instead of file
+            with open(file_path, 'rb') as f:
+                head = f.read(200)
+            _log(f"First 200 bytes (repr): {repr(head)}")
+            if head.strip().lower().startswith(b'<!doctype') or head.strip().lower().startswith(b'<html'):
+                _log("WARNING: response looks like HTML error page, not a real file!")
+
             file_ext = os.path.splitext(actual_filename)[1].lower()
-            
+            _log(f"file_ext = {file_ext}")
             self.progress.emit(100, "Download complete!")
-            
-            # Return file info to main thread
+            _log("Emitting finished(True)")
             self.finished.emit(True, "Download complete", file_path, file_ext)
-            
+
+        except urllib.error.HTTPError as e:
+            body = ""
+            try: body = e.read(500).decode('utf-8', errors='replace')
+            except: pass
+            _log(f"HTTPError: code={e.code} reason={e.reason}")
+            _log(f"Error headers: {dict(e.headers) if hasattr(e,'headers') else 'n/a'}")
+            _log(f"Error body (first 500): {body}")
+            self.finished.emit(False, f"Download failed: HTTP {e.code} {e.reason}\n\nServer said:\n{body[:300]}", "", "")
         except Exception as e:
+            import traceback
+            _log(f"Exception: {type(e).__name__}: {e}")
+            _log(traceback.format_exc())
             self.finished.emit(False, f"Download failed:\n{str(e)}", "", "")
 
 
@@ -259,6 +322,8 @@ class SearchDialog(QWidget):
         """)
         self.results_list.itemSelectionChanged.connect(self.on_selection_changed)
         self.results_list.itemDoubleClicked.connect(self.open_app_url)
+        # self.results_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        # self.results_list.customContextMenuRequested.connect(self.show_app_context_menu)
         layout.addWidget(self.results_list)
         
         # Selected item info panel (for download button)
@@ -476,6 +541,7 @@ class SearchDialog(QWidget):
         encoded_slug = urllib.parse.quote(tool_slug)
         encoded_token = urllib.parse.quote(user_token)
         download_url = f"https://getgoingfast.pro/download-api.php?slug={encoded_slug}&token={encoded_token}"
+        _log(f"download_selected: slug={tool_slug} url={download_url}")
         
         # Disable UI during download
         self.download_btn.setEnabled(False)
@@ -504,7 +570,7 @@ class SearchDialog(QWidget):
             return
         
         # Handle based on file type
-        if file_ext == '.zip':
+        if file_ext in ('.zip', '.rar'):
             # ZIP file - save to Downloads\ggf first
             downloads_dir = os.path.join(os.path.expanduser('~'), 'Downloads', 'ggf')
             os.makedirs(downloads_dir, exist_ok=True)
@@ -546,16 +612,18 @@ class SearchDialog(QWidget):
             
             self.status_label.setText("Download complete!")
         else:
-            # Non-ZIP file - show save dialog
+            # Non-ZIP file - ask where to save (default to ~/Downloads/ggf)
             from PyQt6.QtWidgets import QFileDialog
             default_name = os.path.basename(file_path)
-            save_path, _ = QFileDialog.getSaveFileName(self, "Save File", 
-                default_name, "All Files (*.*)")
+            downloads_ggf = os.path.join(os.path.expanduser('~'), 'Downloads', 'ggf')
+            os.makedirs(downloads_ggf, exist_ok=True)
+            save_path, _ = QFileDialog.getSaveFileName(self, "Save File",
+                os.path.join(downloads_ggf, default_name), "All Files (*.*)")
             
             if save_path:
                 shutil.move(file_path, save_path)
+                _log(f"File saved to: {save_path}")
                 
-                # If it's an exe or bat, ask if they want to run it
                 if file_ext in ['.exe', '.bat']:
                     reply = QMessageBox.question(self, "Run Now?",
                         f"File saved to:\n{save_path}\n\n" +
@@ -564,16 +632,25 @@ class SearchDialog(QWidget):
                     
                     if reply == QMessageBox.StandardButton.Yes:
                         try:
-                            subprocess.Popen([save_path], shell=True)
+                            file_dir = os.path.dirname(save_path)
+                            file_name = os.path.basename(save_path)
+                            _log(f"Launching: {save_path}")
+                            if file_ext == '.bat':
+                                subprocess.Popen(
+                                    f'start "GGF" cmd /k "cd /d "{file_dir}" && "{file_name}""',
+                                    shell=True
+                                )
+                            else:
+                                subprocess.Popen(save_path, shell=True)
                             QMessageBox.information(self, "Launched", "Script/application started!")
                         except Exception as e:
+                            _log(f"Launch error: {e}")
                             QMessageBox.warning(self, "Error", f"Failed to launch:\n{str(e)}")
                 else:
                     QMessageBox.information(self, "Success", f"File saved to:\n{save_path}")
                 
                 self.status_label.setText("File saved!")
             else:
-                # User cancelled - clean up temp file
                 try:
                     os.remove(file_path)
                 except:
@@ -637,6 +714,48 @@ class SearchDialog(QWidget):
                     # Standard apps use getgoingfast.pro
                     full_url = f"https://getgoingfast.pro{url}"
                 webbrowser.open(full_url)
+
+
+    def show_app_context_menu(self, pos):
+        """Right-click context menu on app list - show URLs for debugging (disabled)"""
+        return  # commented out - re-enable for debugging
+        from PyQt6.QtWidgets import QMenu
+        item = self.results_list.itemAt(pos)
+        if not item:
+            return
+        tool_name = item.text()
+        tool_data = next((t for t in self.tools_data if t.get('name') == tool_name), None)
+        if not tool_data:
+            return
+
+        slug = tool_data.get('slug', '')
+        page_url = tool_data.get('url', '')
+        if slug:
+            dl_url = f"https://getgoingfast.pro/download-api.php?slug={urllib.parse.quote(slug)}&token=<token>"
+        else:
+            dl_url = "(no slug)"
+
+        if page_url:
+            full_page = page_url if page_url.startswith('http') else f"https://getgoingfast.pro{page_url}"
+        else:
+            full_page = "(no page url)"
+
+        _log(f"Right-click: {tool_name} | slug={slug} | dl_url={dl_url} | page={full_page}")
+
+        menu = QMenu(self)
+        act_dl   = menu.addAction(f"📋 Copy Download URL  (slug: {slug or 'none'})")
+        act_page = menu.addAction(f"🌐 Copy Page URL")
+        act_open = menu.addAction(f"🔗 Open Page in Browser")
+        action = menu.exec(self.results_list.mapToGlobal(pos))
+
+        if action == act_dl:
+            QApplication.clipboard().setText(dl_url)
+            self.status_label.setText(f"Copied download URL for: {tool_name}")
+        elif action == act_page:
+            QApplication.clipboard().setText(full_page)
+            self.status_label.setText(f"Copied page URL for: {tool_name}")
+        elif action == act_open:
+            webbrowser.open(full_page)
 
 
 def main():

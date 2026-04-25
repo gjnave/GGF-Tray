@@ -5,6 +5,7 @@ import numpy as np
 import math
 import subprocess
 import time
+import socket
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, 
                              QVBoxLayout, QLabel, QSlider, QPushButton,
                              QComboBox, QCheckBox)
@@ -24,6 +25,10 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(SCRIPT_DIR, "visualizer_config.json")
 STATE_PATH = os.path.join(SCRIPT_DIR, "visualizer_state.json")
 CLICK_THROUGH_TIMEOUT_MS = 30000
+SHORTCUTS_CONFIG = os.path.join(SCRIPT_DIR, "shortcuts.txt")
+TRAY_IPC_HOST = "127.0.0.1"
+TRAY_IPC_PORT = 47653
+TRAY_IPC_BUFFER = 65536
 
 
 class SettingsWindow(QWidget):
@@ -343,7 +348,7 @@ class VisualizerWindow(QMainWindow):
             }
         """)
         self.menu_btn.move(width - 64, height - 40)
-        self.menu_btn.clicked.connect(self.show_controls_popup)
+        self.menu_btn.clicked.connect(self.show_tray_menu_popup)
         self.menu_btn.raise_()
 
     def resizeEvent(self, event):
@@ -430,8 +435,147 @@ class VisualizerWindow(QMainWindow):
 
         return menu
 
-    def show_controls_popup(self):
-        menu = self.build_controls_menu()
+    def send_tray_command(self, command, **payload):
+        message = {"command": command, **payload}
+        with socket.create_connection((TRAY_IPC_HOST, TRAY_IPC_PORT), timeout=2.0) as sock:
+            sock.sendall(json.dumps(message).encode("utf-8"))
+            sock.shutdown(socket.SHUT_WR)
+            response = sock.recv(TRAY_IPC_BUFFER)
+        return json.loads(response.decode("utf-8")) if response else {"ok": True}
+
+    def run_tray_command(self, command, **payload):
+        try:
+            response = self.send_tray_command(command, **payload)
+            if response.get("ok"):
+                return True
+        except Exception as e:
+            print(f"Tray command failed: {e}")
+
+        self.show_status_message(
+            "GGF Tray Not Available",
+            "The visualizer menu could not reach the running GGF tray.\n\nStart the tray first, then try again."
+        )
+        return False
+
+    def load_tray_shortcuts(self):
+        shortcuts = {}
+        if not os.path.exists(SHORTCUTS_CONFIG):
+            return shortcuts
+
+        try:
+            with open(SHORTCUTS_CONFIG, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith('#') and '=' in line:
+                        name, filepath = line.split('=', 1)
+                        shortcuts[name.strip()] = filepath.strip()
+        except Exception as e:
+            print(f"Error loading tray shortcuts: {e}")
+        return shortcuts
+
+    def show_status_message(self, title, message):
+        from PyQt6.QtWidgets import QMessageBox
+        box = QMessageBox(self)
+        box.setWindowTitle(title)
+        box.setText(message)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+        box.exec()
+
+    def build_tray_menu(self):
+        from PyQt6.QtWidgets import QMenu
+
+        menu = QMenu(self)
+        shortcuts = self.load_tray_shortcuts()
+
+        if shortcuts:
+            quick_launch_menu = menu.addMenu("Quick Launch")
+            for name in sorted(shortcuts.keys(), key=lambda value: value.lower()):
+                action = quick_launch_menu.addAction(name)
+                action.triggered.connect(lambda checked=False, shortcut_name=name: self.run_tray_command("launch_shortcut", name=shortcut_name))
+            quick_launch_menu.addSeparator()
+            refresh_action = quick_launch_menu.addAction("Refresh List")
+            refresh_action.triggered.connect(lambda: self.run_tray_command("refresh_shortcuts"))
+
+        ai_apps_menu = menu.addMenu("A.I. Apps")
+        search_action = ai_apps_menu.addAction("Search for Apps")
+        search_action.triggered.connect(lambda: self.run_tray_command("open_app_search"))
+        ai_apps_menu.addSeparator()
+        for label, action_name in [
+            ("Quick Launch Manager", "quick_launch"),
+            ("Install GGF Apps", "install_app"),
+            ("Delete GGF Apps", "delete_app"),
+        ]:
+            action = ai_apps_menu.addAction(label)
+            action.triggered.connect(lambda checked=False, tray_action=action_name: self.run_tray_command("menu_action", action=tray_action))
+
+        image_menu = menu.addMenu("Image Operations")
+        for label, action_name in [
+            ("Convert to JPG", "convert_jpg"),
+            ("Convert to PNG", "convert_png"),
+            ("Convert to WebP", "convert_webp"),
+            ("Convert to BMP", "convert_bmp"),
+            ("Resize Image", "resize_image"),
+        ]:
+            if label == "Resize Image":
+                image_menu.addSeparator()
+            action = image_menu.addAction(label)
+            action.triggered.connect(lambda checked=False, tray_action=action_name: self.run_tray_command("menu_action", action=tray_action))
+
+        audio_menu = menu.addMenu("Audio Operations")
+        for label, action_name in [
+            ("Convert to WAV", "convert_wav"),
+            ("Convert to MP3", "convert_mp3"),
+            ("Convert to AAC", "convert_aac"),
+            ("Convert to FLAC", "convert_flac"),
+            ("Convert to OGG", "convert_ogg"),
+        ]:
+            action = audio_menu.addAction(label)
+            action.triggered.connect(lambda checked=False, tray_action=action_name: self.run_tray_command("menu_action", action=tray_action))
+
+        video_menu = menu.addMenu("Video Operations")
+        for label, action_name in [
+            ("Convert Video", "convert_video"),
+            ("Shrink Video", "shrink_video"),
+            ("Transcribe Video", "transcribe"),
+            ("Download Video", "download"),
+            ("Save First Frame", "save_first_frame"),
+            ("Save Last Frame", "save_last_frame"),
+        ]:
+            if label == "Save First Frame":
+                video_menu.addSeparator()
+            action = video_menu.addAction(label)
+            action.triggered.connect(lambda checked=False, tray_action=action_name: self.run_tray_command("menu_action", action=tray_action))
+
+        visualizer_menu = menu.addMenu("Audio Visualizer")
+        start_action = visualizer_menu.addAction("Start Visualizer")
+        start_action.triggered.connect(lambda: self.run_tray_command("menu_action", action="audio_visualizer"))
+        click_label = "Click Through Off" if self.click_through_mode else "Click Through"
+        click_action = visualizer_menu.addAction(click_label)
+        click_action.triggered.connect(lambda: self.run_tray_command("toggle_click_through"))
+
+        utility_menu = menu.addMenu("Utility")
+        hf_action = utility_menu.addAction("HuggingFace Model Browser")
+        hf_action.triggered.connect(lambda: self.run_tray_command("menu_action", action="huggingface_browser"))
+        utility_menu.addSeparator()
+        config_action = utility_menu.addAction("Open Config File")
+        config_action.triggered.connect(lambda: self.run_tray_command("open_config"))
+
+        menu.addSeparator()
+
+        website_action = menu.addAction("Member Site")
+        website_action.triggered.connect(lambda: self.run_tray_command("open_website"))
+        login_action = menu.addAction("Login / Logout")
+        login_action.triggered.connect(lambda: self.run_tray_command("toggle_login"))
+        restart_action = menu.addAction("Restart App")
+        restart_action.triggered.connect(lambda: self.run_tray_command("restart_app"))
+        quit_action = menu.addAction("Quit")
+        quit_action.triggered.connect(lambda: self.run_tray_command("quit_tray"))
+
+        return menu
+
+    def show_tray_menu_popup(self):
+        menu = self.build_tray_menu()
         menu_pos = self.menu_btn.mapToGlobal(QPoint(0, -menu.sizeHint().height()))
         menu.exec(menu_pos)
     

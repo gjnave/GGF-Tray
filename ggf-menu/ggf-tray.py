@@ -14,6 +14,7 @@ from pystray import MenuItem as item
 import threading
 import configparser
 import ctypes
+import socket
 from ctypes import wintypes
 
 # ============================================================================
@@ -79,7 +80,10 @@ CONFIG_PATH = os.path.join(SCRIPT_DIR, "config.txt")
 MUTEX_NAME = "Global\\GGF-Tray-Unique-Mutex-87A3F9B2"
 mutex_handle = None
 APP_ID = "audio-v"  # Audio_visualizer.py 
-UTILITY_ARGS = {"--install-zip"}
+UTILITY_ARGS = {"--install-zip", "--show-visualizer-menu", "--show-companion-menu"}
+TRAY_IPC_HOST = "127.0.0.1"
+TRAY_IPC_PORT = 47653
+TRAY_IPC_BUFFER = 65536
 
 def check_already_running():
     """Check if another instance is already running using Windows mutex"""
@@ -123,10 +127,15 @@ def get_config():
 
 class GGFTray:
     def __init__(self):
+        self.utility_mode = any(arg in UTILITY_ARGS for arg in sys.argv[1:])
+        self.remote_menu_mode = "--show-companion-menu" in sys.argv or "--show-visualizer-menu" in sys.argv
         self.shortcuts = self.load_shortcuts()
         self.icon = None
         self.current_file = None
         self.failed_attempts = 0  # Track attempts without file
+        self.command_server_socket = None
+        self.command_server_thread = None
+        self.command_server_stop = threading.Event()
         
         # Initialize auth manager
         if AUTH_AVAILABLE:
@@ -142,6 +151,152 @@ class GGFTray:
         else:
             self.auth = None
             print("Auth system not available")
+
+    def run_background_task(self, target, *args):
+        """Keep helper-mode actions alive long enough to finish."""
+        thread = threading.Thread(target=target, args=args, daemon=not self.utility_mode)
+        thread.start()
+        return thread
+
+    def start_command_server(self):
+        """Listen for commands from helper processes like the visualizer popup."""
+        if self.utility_mode or self.command_server_thread:
+            return
+
+        def server_loop():
+            server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.command_server_socket = server
+            try:
+                server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                server.bind((TRAY_IPC_HOST, TRAY_IPC_PORT))
+                server.listen(5)
+                server.settimeout(0.5)
+                while not self.command_server_stop.is_set():
+                    try:
+                        conn, _addr = server.accept()
+                    except socket.timeout:
+                        continue
+                    except OSError:
+                        break
+
+                    with conn:
+                        conn.settimeout(1.0)
+                        chunks = []
+                        while True:
+                            try:
+                                chunk = conn.recv(TRAY_IPC_BUFFER)
+                            except socket.timeout:
+                                break
+                            if not chunk:
+                                break
+                            chunks.append(chunk)
+
+                        response = self.handle_command_message(b"".join(chunks))
+                        try:
+                            conn.sendall(json.dumps(response).encode("utf-8"))
+                        except Exception:
+                            pass
+            except Exception as exc:
+                print(f"Tray command server error: {exc}")
+            finally:
+                try:
+                    server.close()
+                except Exception:
+                    pass
+                self.command_server_socket = None
+
+        self.command_server_thread = threading.Thread(target=server_loop, daemon=True)
+        self.command_server_thread.start()
+
+    def stop_command_server(self):
+        self.command_server_stop.set()
+        if self.command_server_socket:
+            try:
+                self.command_server_socket.close()
+            except Exception:
+                pass
+
+    def send_command_to_running_tray(self, command, **payload):
+        """Send a helper-menu command to the live tray process."""
+        message = {"command": command, **payload}
+        try:
+            with socket.create_connection((TRAY_IPC_HOST, TRAY_IPC_PORT), timeout=2.0) as sock:
+                sock.sendall(json.dumps(message).encode("utf-8"))
+                sock.shutdown(socket.SHUT_WR)
+                response = sock.recv(TRAY_IPC_BUFFER)
+            if response:
+                return json.loads(response.decode("utf-8"))
+            return {"ok": True}
+        except Exception as exc:
+            print(f"Unable to reach running tray: {exc}")
+            return {"ok": False, "error": str(exc)}
+
+    def handle_command_message(self, raw_message):
+        """Decode and dispatch helper-process commands."""
+        try:
+            if not raw_message:
+                return {"ok": False, "error": "empty command"}
+            payload = json.loads(raw_message.decode("utf-8"))
+            return self.dispatch_remote_command(payload)
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def dispatch_remote_command(self, payload):
+        """Execute a whitelisted command from a helper process."""
+        command = payload.get("command")
+
+        if command == "ping":
+            return {"ok": True, "message": "tray online"}
+        if command == "menu_action":
+            action = payload.get("action")
+            if not action:
+                return {"ok": False, "error": "missing action"}
+            self.open_menu_for(action)
+            return {"ok": True}
+        if command == "launch_shortcut":
+            shortcut_name = payload.get("name")
+            if not shortcut_name:
+                return {"ok": False, "error": "missing shortcut"}
+            self.launch_shortcut(shortcut_name)
+            return {"ok": True}
+        if command == "refresh_shortcuts":
+            self.refresh_shortcuts()
+            return {"ok": True}
+        if command == "toggle_click_through":
+            self.toggle_click_through()
+            return {"ok": True}
+        if command == "open_app_search":
+            self.open_app_search()
+            return {"ok": True}
+        if command == "open_config":
+            self.open_config()
+            return {"ok": True}
+        if command == "open_website":
+            self.open_website()
+            return {"ok": True}
+        if command == "toggle_login":
+            self.toggle_login()
+            return {"ok": True}
+        if command == "restart_app":
+            self.restart_app()
+            return {"ok": True}
+        if command == "quit_tray":
+            self.quit_tray()
+            return {"ok": True}
+
+        return {"ok": False, "error": f"unknown command: {command}"}
+
+    def run_companion_command(self, command, **payload):
+        """Route companion popup actions back to the running tray."""
+        response = self.send_command_to_running_tray(command, **payload)
+        if response.get("ok"):
+            return True
+        self.show_message(
+            "GGF Tray Not Responding",
+            "The main tray process did not accept the command.\n\nPlease restart GGF Tray and try again.",
+            "error"
+        )
+        return False
         
         
     def check_clipboard_for_file(self):
@@ -328,10 +483,7 @@ class GGFTray:
             elif action == 'delete_app':
                 self.delete_ggf_app()
             elif action == 'quick_launch':
-                import threading
-                t = threading.Thread(target=self.quick_launch_manager, daemon=False)
-                t.start()
-                return
+                self.quick_launch_manager()
             elif action == 'huggingface_browser':
                 self.huggingface_model_browser()
             elif action == 'audio_visualizer':  # ADDED
@@ -372,8 +524,131 @@ class GGFTray:
                     elif action == 'save_last_frame':
                         self.save_last_frame()
         
-        # Run in separate thread to avoid blocking pystray
-        threading.Thread(target=run_action, daemon=True).start()
+        if self.utility_mode:
+            run_action()
+        else:
+            self.run_background_task(run_action)
+
+    def show_visualizer_companion_menu(self):
+        """Show a tray-style popup menu for visualizer and Explorer companion entry."""
+        import tkinter as tk
+
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes('-topmost', True)
+
+        menu = tk.Menu(root, tearoff=0)
+
+        def invoke_menu_action(action):
+            root.destroy()
+            if self.remote_menu_mode:
+                self.run_companion_command("menu_action", action=action)
+            else:
+                self.open_menu_for(action)
+
+        def invoke_command(command, **payload):
+            root.destroy()
+            if self.remote_menu_mode:
+                self.run_companion_command(command, **payload)
+            else:
+                local_actions = {
+                    "refresh_shortcuts": self.refresh_shortcuts,
+                    "toggle_click_through": self.toggle_click_through,
+                    "open_app_search": self.open_app_search,
+                    "open_config": self.open_config,
+                    "open_website": self.open_website,
+                    "toggle_login": self.toggle_login,
+                    "restart_app": self.restart_app,
+                    "quit_tray": self.quit_tray,
+                }
+                handler = local_actions.get(command)
+                if handler:
+                    handler()
+
+        def invoke_shortcut(shortcut_name):
+            root.destroy()
+            if self.remote_menu_mode:
+                self.run_companion_command("launch_shortcut", name=shortcut_name)
+            else:
+                self.launch_shortcut(shortcut_name)
+
+        if self.shortcuts:
+            quick_launch_menu = tk.Menu(menu, tearoff=0)
+            for name in sorted(self.shortcuts.keys(), key=lambda value: value.lower()):
+                quick_launch_menu.add_command(
+                    label=name,
+                    command=lambda shortcut_name=name: invoke_shortcut(shortcut_name)
+                )
+            quick_launch_menu.add_separator()
+            quick_launch_menu.add_command(label="Refresh List", command=lambda: invoke_command("refresh_shortcuts"))
+            menu.add_cascade(label="Quick Launch", menu=quick_launch_menu)
+
+        ai_apps_menu = tk.Menu(menu, tearoff=0)
+        ai_apps_menu.add_command(label="Search for Apps", command=lambda: invoke_command("open_app_search"))
+        ai_apps_menu.add_separator()
+        ai_apps_menu.add_command(label="Quick Launch Manager", command=lambda: invoke_menu_action('quick_launch'))
+        ai_apps_menu.add_command(label="Install GGF Apps", command=lambda: invoke_menu_action('install_app'))
+        ai_apps_menu.add_command(label="Delete GGF Apps", command=lambda: invoke_menu_action('delete_app'))
+        menu.add_cascade(label="A.I. Apps", menu=ai_apps_menu)
+
+        image_menu = tk.Menu(menu, tearoff=0)
+        image_menu.add_command(label="Convert to JPG", command=lambda: invoke_menu_action('convert_jpg'))
+        image_menu.add_command(label="Convert to PNG", command=lambda: invoke_menu_action('convert_png'))
+        image_menu.add_command(label="Convert to WebP", command=lambda: invoke_menu_action('convert_webp'))
+        image_menu.add_command(label="Convert to BMP", command=lambda: invoke_menu_action('convert_bmp'))
+        image_menu.add_separator()
+        image_menu.add_command(label="Resize Image", command=lambda: invoke_menu_action('resize_image'))
+        menu.add_cascade(label="Image Operations", menu=image_menu)
+
+        audio_menu = tk.Menu(menu, tearoff=0)
+        audio_menu.add_command(label="Convert to WAV", command=lambda: invoke_menu_action('convert_wav'))
+        audio_menu.add_command(label="Convert to MP3", command=lambda: invoke_menu_action('convert_mp3'))
+        audio_menu.add_command(label="Convert to AAC", command=lambda: invoke_menu_action('convert_aac'))
+        audio_menu.add_command(label="Convert to FLAC", command=lambda: invoke_menu_action('convert_flac'))
+        audio_menu.add_command(label="Convert to OGG", command=lambda: invoke_menu_action('convert_ogg'))
+        menu.add_cascade(label="Audio Operations", menu=audio_menu)
+
+        video_menu = tk.Menu(menu, tearoff=0)
+        video_menu.add_command(label="Convert Video", command=lambda: invoke_menu_action('convert_video'))
+        video_menu.add_command(label="Shrink Video", command=lambda: invoke_menu_action('shrink_video'))
+        video_menu.add_command(label="Transcribe Video", command=lambda: invoke_menu_action('transcribe'))
+        video_menu.add_command(label="Download Video", command=lambda: invoke_menu_action('download'))
+        video_menu.add_separator()
+        video_menu.add_command(label="Save First Frame", command=lambda: invoke_menu_action('save_first_frame'))
+        video_menu.add_command(label="Save Last Frame", command=lambda: invoke_menu_action('save_last_frame'))
+        menu.add_cascade(label="Video Operations", menu=video_menu)
+
+        visualizer_menu = tk.Menu(menu, tearoff=0)
+        visualizer_menu.add_command(label="Start Visualizer", command=lambda: invoke_menu_action('audio_visualizer'))
+        click_label = "Click Through Off" if self.get_visualizer_state().get('click_through', False) else "Click Through"
+        visualizer_menu.add_command(label=click_label, command=lambda: invoke_command("toggle_click_through"))
+        menu.add_cascade(label="Audio Visualizer", menu=visualizer_menu)
+
+        utility_menu = tk.Menu(menu, tearoff=0)
+        utility_menu.add_command(label="HuggingFace Model Browser", command=lambda: invoke_menu_action('huggingface_browser'))
+        utility_menu.add_separator()
+        utility_menu.add_command(label="Open Config File", command=lambda: invoke_command("open_config"))
+        menu.add_cascade(label="Utility", menu=utility_menu)
+
+        menu.add_separator()
+        menu.add_command(label="Member Site", command=lambda: invoke_command("open_website"))
+        auth_label = 'Logout from GGF' if (self.auth and self.auth.is_authenticated()) else 'Login to GGF'
+        menu.add_command(label=auth_label, command=lambda: invoke_command("toggle_login"))
+        menu.add_command(label="Restart App", command=lambda: invoke_command("restart_app"))
+        menu.add_command(label="Quit", command=lambda: invoke_command("quit_tray"))
+
+        root.update_idletasks()
+        try:
+            x, y = root.winfo_pointerxy()
+        except Exception:
+            x = root.winfo_screenwidth() - 80
+            y = root.winfo_screenheight() - 120
+        root.update_idletasks()
+        try:
+            menu.tk_popup(x, y)
+        finally:
+            menu.grab_release()
+            root.destroy()
     
     def download_video(self):
         """Download video with yt-dlp"""
@@ -824,11 +1099,38 @@ class GGFTray:
         
         root.destroy()
         
+        def extract_archive(src, dest):
+            """Extract zip or rar to dest. Uses zipfile for .zip, bsdtar/7-zip for .rar"""
+            ext = os.path.splitext(src)[1].lower()
+            if ext == '.zip':
+                with zipfile.ZipFile(src, 'r') as z:
+                    z.extractall(dest)
+            elif ext == '.rar':
+                # Try Windows built-in bsdtar first (Win10+)
+                result = subprocess.run(['tar', '-xf', src, '-C', dest],
+                                        capture_output=True, text=True)
+                if result.returncode != 0:
+                    # Fall back to 7-zip
+                    seven_zip = None
+                    for path in [r'C:\Program Files\7-Zip\7z.exe',
+                                 r'C:\Program Files (x86)\7-Zip\7z.exe']:
+                        if os.path.exists(path):
+                            seven_zip = path
+                            break
+                    if seven_zip:
+                        subprocess.run([seven_zip, 'x', src, f'-o{dest}', '-y'],
+                                       capture_output=True)
+                    else:
+                        raise RuntimeError(
+                            f"Cannot extract RAR: bsdtar failed ({result.stderr.strip()}) "
+                            "and 7-Zip not found. Install 7-Zip or re-upload as ZIP.")
+            else:
+                raise RuntimeError(f"Unsupported archive type: {ext}")
+
         try:
-            # Extract zip
+            # Extract archive (zip or rar)
             os.makedirs(install_dir, exist_ok=True)
-            with zipfile.ZipFile(zip_file, 'r') as zip_ref:
-                zip_ref.extractall(install_dir)
+            extract_archive(zip_file, install_dir)
             
             # Look for installer and launcher files - SIMPLIFIED LOGIC
             install_bat = None
@@ -908,56 +1210,6 @@ class GGFTray:
                     if custom_installer:
                         install_bat = custom_installer
             
-            # FALLBACK: if no named installer/launcher found, collect all .bat/.exe files and ask user
-            if not installer_files and not launcher_files:
-                all_bats = []
-                for root_dir, dirs, files in os.walk(install_dir):
-                    for file in files:
-                        if file.endswith('.bat') or file.endswith('.exe'):
-                            if 'uninstall' not in file.lower():
-                                all_bats.append(os.path.join(root_dir, file))
-                
-                if all_bats:
-                    fallback_root = tk.Tk()
-                    fallback_root.withdraw()
-                    fallback_root.attributes('-topmost', True)
-                    
-                    if len(all_bats) == 1:
-                        sole_file = all_bats[0]
-                        sole_name = os.path.basename(sole_file)
-                        # Ask if it's an installer
-                        if messagebox.askyesno("Run Installer?",
-                            f"Found: {sole_name}\n\nRun this as the installer?",
-                            parent=fallback_root):
-                            install_bat = sole_file
-                        # Ask if it should also be the launcher shortcut
-                        if messagebox.askyesno("Add to Quick Launch?",
-                            f"Add '{sole_name}' to Quick Launch shortcuts?",
-                            parent=fallback_root):
-                            run_bat = sole_file
-                    else:
-                        # Multiple unlabeled bats — show numbered list, ask user to pick installer
-                        file_list = "\n".join(f"{i+1}. {os.path.basename(f)}" for i, f in enumerate(all_bats))
-                        choice = simpledialog.askstring("Select Installer",
-                            f"No installer/launcher detected by name.\n\nFound these files:\n{file_list}\n\n"
-                            f"Enter number to run as installer (or leave blank to skip):",
-                            parent=fallback_root)
-                        if choice and choice.isdigit():
-                            idx = int(choice) - 1
-                            if 0 <= idx < len(all_bats):
-                                install_bat = all_bats[idx]
-                        
-                        choice2 = simpledialog.askstring("Select Launcher",
-                            f"Found these files:\n{file_list}\n\n"
-                            f"Enter number to add as Quick Launch shortcut (or leave blank to skip):",
-                            parent=fallback_root)
-                        if choice2 and choice2.isdigit():
-                            idx2 = int(choice2) - 1
-                            if 0 <= idx2 < len(all_bats):
-                                run_bat = all_bats[idx2]
-                    
-                    fallback_root.destroy()
-
             # Smart launcher selection (similar logic)
             if launcher_files and not is_comfyui_install:
                 best_launcher = None
@@ -1352,10 +1604,10 @@ class GGFTray:
                         self.show_message("Error", "Cannot find Python interpreter", "error")
                         return
                 
-                subprocess.Popen([python_exe, app_search_script])
+                self._app_search_proc = subprocess.Popen([python_exe, app_search_script])
             else:
                 # Running as script - use current Python
-                subprocess.Popen([sys.executable, app_search_script])
+                self._app_search_proc = subprocess.Popen([sys.executable, app_search_script])
         except Exception as e:
             self.show_message("Error", f"Failed to open app search: {str(e)}", "error")
     
@@ -1392,7 +1644,7 @@ class GGFTray:
             except Exception as e:
                 self.show_message("Error", f"Failed to launch {name}:\n{str(e)}", "error")
         
-        threading.Thread(target=do_launch, daemon=True).start()
+        self.run_background_task(do_launch)
     
     def huggingface_model_browser(self):
         """Browse and download HuggingFace models"""
@@ -1930,21 +2182,29 @@ class GGFTray:
                     # Login successful - auto-restart
                     self.restart_app()
             
-            threading.Thread(target=poll_and_restart, daemon=True).start()
+            self.run_background_task(poll_and_restart)
         
         if self.auth.is_authenticated():
             # Run logout in thread
-            threading.Thread(target=do_logout, daemon=True).start()
+            self.run_background_task(do_logout)
         else:
             # Run login directly
-            threading.Thread(target=do_login, daemon=True).start()
+            self.run_background_task(do_login)
     
     def restart_app(self):
         """Restart the tray application"""
         print("Restart button clicked")
+        self.stop_command_server()
         
         # Close visualizer if running
         self.close_audio_visualizer()
+        
+        # Kill app_search if open
+        try:
+            if getattr(self, '_app_search_proc', None) and self._app_search_proc.poll() is None:
+                self._app_search_proc.kill()
+        except:
+            pass
         
         # Stop icon first
         if self.icon:
@@ -1968,6 +2228,7 @@ class GGFTray:
     
     def quit_tray(self):
         """Quit the tray app HARD"""
+        self.stop_command_server()
         self.close_audio_visualizer()
         try:
             if self.icon:
@@ -2083,6 +2344,8 @@ class GGFTray:
     
     def run(self):
         """Run the system tray app"""
+        self.start_command_server()
+
         # Load icon
         try:
             image = Image.open(ICON_PATH)
@@ -2113,6 +2376,9 @@ if __name__ == "__main__":
         auto_confirm = "--auto-install" in sys.argv
         app = GGFTray()
         app.install_ggf_app(zip_path=zip_path, auto_confirm=auto_confirm)
+    elif "--show-companion-menu" in sys.argv or "--show-visualizer-menu" in sys.argv:
+        app = GGFTray()
+        app.show_visualizer_companion_menu()
     else:
         app = GGFTray()
         app.run()
