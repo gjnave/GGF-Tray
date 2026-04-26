@@ -1,5 +1,5 @@
 @echo off
-setlocal EnableExtensions
+setlocal EnableExtensions EnableDelayedExpansion
 
 echo.
 echo ===============================================
@@ -22,26 +22,18 @@ if /I "%~2"=="--no-start" set "AUTO_START=0"
 
 REM Choose Python (prefer py launcher if available)
 set "PYEXE="
-
-where py >nul 2>&1
-if not errorlevel 1 py -3 --version >nul 2>&1
-if not errorlevel 1 set "PYEXE=py -3"
-
-if "%PYEXE%"=="" where python >nul 2>&1
-if "%PYEXE%"=="" if not errorlevel 1 set "PYEXE=python"
-
-if "%PYEXE%"=="" where python3 >nul 2>&1
-if "%PYEXE%"=="" if not errorlevel 1 set "PYEXE=python3"
-
-if "%PYEXE%"=="" if exist "%LOCALAPPDATA%\Programs\Python\Python312\python.exe" set "PYEXE=\"%LOCALAPPDATA%\Programs\Python\Python312\python.exe\""
-if "%PYEXE%"=="" if exist "%LOCALAPPDATA%\Programs\Python\Python311\python.exe" set "PYEXE=\"%LOCALAPPDATA%\Programs\Python\Python311\python.exe\""
-if "%PYEXE%"=="" if exist "%LOCALAPPDATA%\Programs\Python\Python310\python.exe" set "PYEXE=\"%LOCALAPPDATA%\Programs\Python\Python310\python.exe\""
-if "%PYEXE%"=="" if exist "C:\Python312\python.exe" set "PYEXE=\"C:\Python312\python.exe\""
-if "%PYEXE%"=="" if exist "C:\Python311\python.exe" set "PYEXE=\"C:\Python311\python.exe\""
-if "%PYEXE%"=="" if exist "C:\Python310\python.exe" set "PYEXE=\"C:\Python310\python.exe\""
+py -3 --version >nul 2>&1
+if not errorlevel 1 (
+    set "PYEXE=py -3"
+) else (
+    python --version >nul 2>&1
+    if not errorlevel 1 (
+        set "PYEXE=python"
+    )
+)
 
 if "%PYEXE%"=="" (
-    echo ERROR: Python is not installed or not in PATH
+    echo ERROR: Python is not installed (or not in PATH)
     echo Install Python 3.10+ from python.org, then re-run this installer.
     pause
     exit /b 1
