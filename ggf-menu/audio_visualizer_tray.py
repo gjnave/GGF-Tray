@@ -6,6 +6,7 @@ import math
 import subprocess
 import time
 import socket
+import ctypes
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, 
                              QVBoxLayout, QLabel, QSlider, QPushButton,
                              QComboBox, QCheckBox)
@@ -36,6 +37,8 @@ TRAY_IPC_HOST = "127.0.0.1"
 TRAY_IPC_PORT = 47653
 TRAY_IPC_BUFFER = 65536
 LOG_PATH = os.path.join(SCRIPT_DIR, "visualizer_debug.log")
+VISUALIZER_MUTEX_NAME = "Global\\GGF-Audio-Visualizer-Unique-Mutex-4F21B991"
+visualizer_mutex_handle = None
 
 
 def log_visualizer(message):
@@ -47,6 +50,22 @@ def log_visualizer(message):
             file_handle.write(line + "\n")
     except Exception:
         pass
+
+
+def acquire_visualizer_mutex():
+    global visualizer_mutex_handle
+    if os.name != "nt":
+        return True
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, ctypes.c_bool, ctypes.c_wchar_p]
+    kernel32.CreateMutexW.restype = ctypes.c_void_p
+
+    visualizer_mutex_handle = kernel32.CreateMutexW(None, False, VISUALIZER_MUTEX_NAME)
+    if not visualizer_mutex_handle:
+        return False
+
+    return ctypes.get_last_error() != 183
 
 
 class SettingsWindow(QWidget):
@@ -76,7 +95,7 @@ class SettingsWindow(QWidget):
         layout.addWidget(QLabel("Audio Input Device:"))
         self.device_combo = QComboBox()
         for device in self.audio_devices:
-            self.device_combo.addItem(device['name'])
+            self.device_combo.addItem(device['name'], device['index'])
         self.device_combo.setCurrentIndex(self.current_device_index)
         self.device_combo.currentIndexChanged.connect(self.on_device_changed)
         layout.addWidget(self.device_combo)
@@ -197,7 +216,9 @@ class SettingsWindow(QWidget):
         
     def on_device_changed(self, index):
         self.current_device_index = index
-        self.audio_device_changed.emit(index)
+        device_index = self.device_combo.itemData(index)
+        if device_index is not None:
+            self.audio_device_changed.emit(int(device_index))
         
     def save_settings(self):
         self.config['visualMode'] = self.mode_combo.currentIndex()
@@ -2247,7 +2268,13 @@ animate();
         self.audio_stop_event.set()
         if self.audio_thread and self.audio_thread.is_alive():
             self.audio_thread.join(timeout=1)
+        if hasattr(self, 'settings_window') and self.settings_window is not None:
+            try:
+                self.settings_window.close()
+            except Exception:
+                pass
         event.accept()
+        QApplication.quit()
     
     def mousePressEvent(self, event):
         """Handle left click to cycle through visual modes"""
@@ -2369,13 +2396,18 @@ def main():
     print("STARTING AUDIO VISUALIZER (7 Modes)")
     print("="*60)
     log_visualizer("Launching visualizer")
+
+    if not acquire_visualizer_mutex():
+        log_visualizer("Visualizer is already running; exiting duplicate launch")
+        return 0
     
     app = QApplication(sys.argv)
+    app.setQuitOnLastWindowClosed(True)
     config = load_config()
     window = VisualizerWindow(config)
     window.show()
-    sys.exit(app.exec())
+    return app.exec()
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())
