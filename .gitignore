@@ -46,3 +46,6 @@ ggf-menu/ACBR_Windows/
 # Windows noise
 Thumbs.db
 desktop.ini
+
+# Local install scratch
+test install/
