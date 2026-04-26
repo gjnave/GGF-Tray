@@ -17,6 +17,10 @@ BACKUP/
 Hold App/
 ggf-menu/build/
 ggf-menu/dist/
+ggf-menu/build_onefile/
+ggf-menu/build_onefile-BKUP/
+ggf-menu/dist_onefile/
+ggf-menu/dist_onefile-BKUP/
 ggf-menu/buildbackup/
 *.spec
 *-backup.py
@@ -29,6 +33,7 @@ ggf-menu/_logs/
 .ggf_tray.lock
 .ggf_menu.lock
 ggf-menu/visualizer_state.json
+ggf-menu/visualizer_debug.log
 
 # Local/private auth and machine state
 .env

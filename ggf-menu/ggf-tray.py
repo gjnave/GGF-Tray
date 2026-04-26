@@ -15,6 +15,7 @@ import threading
 import configparser
 import ctypes
 import socket
+import time
 from ctypes import wintypes
 
 # ============================================================================
@@ -70,17 +71,38 @@ except ImportError:
     AUTH_AVAILABLE = False
     AuthManager = None
 
-# Get script directory (ggf-menu folder)
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-ICON_PATH = os.path.join(SCRIPT_DIR, "logo.ico")
+def get_resource_dir():
+    if getattr(sys, 'frozen', False):
+        return getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def get_app_dir():
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def get_subprocess_env():
+    env = os.environ.copy()
+    if getattr(sys, 'frozen', False):
+        env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    return env
+
+
+RESOURCE_DIR = get_resource_dir()
+SCRIPT_DIR = get_app_dir()
+ICON_PATH = os.path.join(RESOURCE_DIR, "logo.ico")
 SHORTCUTS_CONFIG = os.path.join(SCRIPT_DIR, "shortcuts.txt")
 CONFIG_PATH = os.path.join(SCRIPT_DIR, "config.txt")
+TRAY_UI_STATE_PATH = os.path.join(SCRIPT_DIR, "tray_ui_state.json")
 
 # Windows mutex for single instance check
 MUTEX_NAME = "Global\\GGF-Tray-Unique-Mutex-87A3F9B2"
 mutex_handle = None
 APP_ID = "audio-v"  # Audio_visualizer.py 
-UTILITY_ARGS = {"--install-zip", "--show-visualizer-menu", "--show-companion-menu"}
+WHISPER_ENABLED = False
+UTILITY_ARGS = {"--install-zip", "--show-visualizer-menu", "--show-companion-menu", "--run-app-search", "--run-visualizer"}
 TRAY_IPC_HOST = "127.0.0.1"
 TRAY_IPC_PORT = 47653
 TRAY_IPC_BUFFER = 65536
@@ -136,6 +158,9 @@ class GGFTray:
         self.command_server_socket = None
         self.command_server_thread = None
         self.command_server_stop = threading.Event()
+        self.helper_processes = []
+        self.ui_state = self.load_ui_state()
+        self.tips_thread = None
         
         # Initialize auth manager
         if AUTH_AVAILABLE:
@@ -157,6 +182,149 @@ class GGFTray:
         thread = threading.Thread(target=target, args=args, daemon=not self.utility_mode)
         thread.start()
         return thread
+
+    def load_ui_state(self):
+        state = {
+            "show_tips_on_startup": True
+        }
+        try:
+            if os.path.exists(TRAY_UI_STATE_PATH):
+                with open(TRAY_UI_STATE_PATH, "r", encoding="utf-8") as file_handle:
+                    loaded = json.load(file_handle)
+                if isinstance(loaded, dict):
+                    state.update(loaded)
+        except Exception as exc:
+            print(f"Error loading tray UI state: {exc}")
+        return state
+
+    def save_ui_state(self):
+        try:
+            with open(TRAY_UI_STATE_PATH, "w", encoding="utf-8") as file_handle:
+                json.dump(self.ui_state, file_handle, indent=2)
+        except Exception as exc:
+            print(f"Error saving tray UI state: {exc}")
+
+    def track_process(self, process):
+        if process is not None:
+            self.helper_processes.append(process)
+        return process
+
+    def iter_helper_processes(self):
+        if psutil is None:
+            return
+        current_pid = os.getpid()
+        for proc in psutil.process_iter(['pid', 'name', 'exe', 'cmdline']):
+            try:
+                if proc.pid == current_pid:
+                    continue
+                cmd = proc.info.get('cmdline') or []
+                cmd_text = " ".join(str(part) for part in cmd).lower()
+                exe_path = (proc.info.get('exe') or '').lower()
+            except (psutil.Error, OSError, TypeError, ValueError):
+                continue
+            if not cmd_text:
+                continue
+            if "--run-visualizer" in cmd_text or "--run-app-search" in cmd_text:
+                yield proc
+                continue
+            if getattr(sys, 'frozen', False) and exe_path == sys.executable.lower():
+                if "--show-companion-menu" in cmd_text or "--show-visualizer-menu" in cmd_text:
+                    yield proc
+
+    def cleanup_helper_processes(self):
+        seen_pids = set()
+        for process in list(self.helper_processes):
+            try:
+                if process and process.poll() is None and process.pid not in seen_pids:
+                    seen_pids.add(process.pid)
+                    process.kill()
+            except Exception:
+                pass
+
+        for proc in self.iter_helper_processes() or []:
+            try:
+                if proc.pid in seen_pids:
+                    continue
+                seen_pids.add(proc.pid)
+                proc.kill()
+            except Exception:
+                pass
+
+        self.helper_processes = []
+
+    def show_startup_tips_if_needed(self):
+        if not self.ui_state.get("show_tips_on_startup", True):
+            return
+        if self.tips_thread and self.tips_thread.is_alive():
+            return
+
+        def tips_worker():
+            time.sleep(1.5)
+            root = tk.Tk()
+            root.title("GGF Tray Tips")
+            root.attributes('-topmost', True)
+            root.resizable(False, False)
+            root.configure(bg="#111111")
+
+            width = 430
+            height = 250
+            screen_width = root.winfo_screenwidth()
+            screen_height = root.winfo_screenheight()
+            pos_x = max(20, screen_width - width - 20)
+            pos_y = max(20, screen_height - height - 90)
+            root.geometry(f"{width}x{height}+{pos_x}+{pos_y}")
+
+            title = tk.Label(
+                root,
+                text="How to use GGF Tray",
+                font=("Segoe UI", 12, "bold"),
+                fg="white",
+                bg="#111111"
+            )
+            title.pack(anchor="w", padx=14, pady=(12, 6))
+
+            body = (
+                "- Right-click the tray icon for A.I. Apps, conversions, utility tools, and restart/quit.\n\n"
+                "- Double-click the tray icon to open the Audio Visualizer instantly.\n\n"
+                "- Use the visualizer Menu button for quick access when the tray icon is hidden.\n\n"
+                "- Clipboard-based conversions work after selecting a file in Explorer and pressing Ctrl+C."
+            )
+            label = tk.Label(
+                root,
+                text=body,
+                justify="left",
+                wraplength=400,
+                fg="white",
+                bg="#111111",
+                font=("Segoe UI", 10)
+            )
+            label.pack(anchor="w", padx=14)
+
+            show_again = tk.BooleanVar(value=self.ui_state.get("show_tips_on_startup", True))
+            checkbox = tk.Checkbutton(
+                root,
+                text="Show this tip next launch",
+                variable=show_again,
+                fg="white",
+                bg="#111111",
+                activebackground="#111111",
+                activeforeground="white",
+                selectcolor="#222222"
+            )
+            checkbox.pack(anchor="w", padx=14, pady=(10, 6))
+
+            def close_tips():
+                self.ui_state["show_tips_on_startup"] = bool(show_again.get())
+                self.save_ui_state()
+                root.destroy()
+
+            button = tk.Button(root, text="Close", command=close_tips, width=10)
+            button.pack(anchor="e", padx=14, pady=(0, 12))
+            root.protocol("WM_DELETE_WINDOW", close_tips)
+            root.mainloop()
+
+        self.tips_thread = threading.Thread(target=tips_worker, daemon=False)
+        self.tips_thread.start()
 
     def start_command_server(self):
         """Listen for commands from helper processes like the visualizer popup."""
@@ -251,7 +419,7 @@ class GGFTray:
             action = payload.get("action")
             if not action:
                 return {"ok": False, "error": "missing action"}
-            self.open_menu_for(action)
+            self.run_background_task(self.execute_menu_action, action)
             return {"ok": True}
         if command == "launch_shortcut":
             shortcut_name = payload.get("name")
@@ -318,17 +486,24 @@ class GGFTray:
    
 
     def iter_audio_visualizer_processes(self):
-        visualizer_path = os.path.abspath(os.path.join(SCRIPT_DIR, "audio_visualizer_tray.py")).lower()
+        if psutil is None:
+            return
         for proc in psutil.process_iter(['pid', 'cmdline']):
-            cmd = proc.info.get('cmdline') or []
-            cmd_text = " ".join(str(part) for part in cmd).lower()
-            if f"--app-id={APP_ID}" in cmd_text or visualizer_path in cmd_text:
+            try:
+                cmd = proc.info.get('cmdline') or []
+                cmd_text = " ".join(str(part) for part in cmd).lower()
+            except (psutil.Error, OSError, TypeError, ValueError):
+                continue
+            if f"--app-id={APP_ID}" in cmd_text or "--run-visualizer" in cmd_text:
                 yield proc
 
     def start_audio_visualizer(self):
-        visualizer_path = os.path.join(SCRIPT_DIR, "audio_visualizer_tray.py")
+        if not getattr(sys, 'frozen', False):
+            visualizer_path = os.path.join(SCRIPT_DIR, "audio_visualizer_tray.py")
+        else:
+            visualizer_path = None
 
-        if not os.path.exists(visualizer_path):
+        if not getattr(sys, 'frozen', False) and not os.path.exists(visualizer_path):
             self.show_message("Error", "Audio visualizer not found!", "error")
             return
 
@@ -343,18 +518,13 @@ class GGFTray:
                 creationflags |= subprocess.DETACHED_PROCESS
 
             if getattr(sys, 'frozen', False):
-                # Running from PyInstaller - use system Python
-                import shutil
-                python_exe = shutil.which('python') or shutil.which('pythonw')
-                if not python_exe:
-                    self.show_message("Error", 
-                        "Python not found on system.\n\nPlease install Python to use this feature.", 
-                        "error")
-                    return
-                subprocess.Popen([python_exe, visualizer_path, f"--app-id={APP_ID}"], cwd=SCRIPT_DIR, close_fds=True, creationflags=creationflags)
+                self.track_process(subprocess.Popen(
+                    f'start "" /D "{SCRIPT_DIR}" "{sys.executable}" --run-visualizer --app-id={APP_ID}',
+                    shell=True,
+                    env=get_subprocess_env()
+                ))
             else:
-                # Running as script
-                subprocess.Popen([sys.executable, visualizer_path, f"--app-id={APP_ID}"], cwd=SCRIPT_DIR, close_fds=True, creationflags=creationflags)
+                self.track_process(subprocess.Popen([sys.executable, visualizer_path, f"--app-id={APP_ID}"], cwd=SCRIPT_DIR, close_fds=True, creationflags=creationflags))
         except Exception as e:
             self.show_message("Error", f"Failed to start visualizer:\n{str(e)}", "error")
 
@@ -473,61 +643,60 @@ class GGFTray:
         if self.icon:
             self.icon.menu = self.create_menu()
     
+    def execute_menu_action(self, action):
+        """Execute a menu action immediately in the current thread."""
+        if action == 'download':
+            self.download_video()
+        elif action == 'install_app':
+            self.install_ggf_app()
+        elif action == 'delete_app':
+            self.delete_ggf_app()
+        elif action == 'quick_launch':
+            self.quick_launch_manager()
+        elif action == 'huggingface_browser':
+            self.huggingface_model_browser()
+        elif action == 'audio_visualizer':
+            self.start_audio_visualizer()
+        elif action in ['convert_jpg', 'convert_png', 'convert_webp', 'convert_bmp',
+                        'convert_wav', 'convert_mp3', 'convert_aac', 'convert_flac', 'convert_ogg',
+                        'resize_image', 'convert_video', 'shrink_video',
+                        'save_first_frame', 'save_last_frame']:
+            if self.get_file_or_show_menu(action):
+                if action == 'convert_jpg':
+                    self.convert_to_jpg()
+                elif action == 'convert_png':
+                    self.convert_to_format('png')
+                elif action == 'convert_webp':
+                    self.convert_to_format('webp')
+                elif action == 'convert_bmp':
+                    self.convert_to_format('bmp')
+                elif action == 'convert_wav':
+                    self.convert_audio_to_format('wav')
+                elif action == 'convert_mp3':
+                    self.convert_audio_to_format('mp3')
+                elif action == 'convert_aac':
+                    self.convert_audio_to_format('aac')
+                elif action == 'convert_flac':
+                    self.convert_audio_to_format('flac')
+                elif action == 'convert_ogg':
+                    self.convert_audio_to_format('ogg')
+                elif action == 'resize_image':
+                    self.resize_image()
+                elif action == 'convert_video':
+                    self.convert_video_window()
+                elif action == 'shrink_video':
+                    self.shrink_video()
+                elif action == 'save_first_frame':
+                    self.save_first_frame()
+                elif action == 'save_last_frame':
+                    self.save_last_frame()
+
     def open_menu_for(self, action):
         """Execute operation based on action type - run in thread to avoid blocking"""
-        def run_action():
-            if action == 'download':
-                self.download_video()
-            elif action == 'install_app':
-                self.install_ggf_app()
-            elif action == 'delete_app':
-                self.delete_ggf_app()
-            elif action == 'quick_launch':
-                self.quick_launch_manager()
-            elif action == 'huggingface_browser':
-                self.huggingface_model_browser()
-            elif action == 'audio_visualizer':  # ADDED
-                self.start_audio_visualizer()
-            elif action in ['convert_jpg', 'convert_png', 'convert_webp', 'convert_bmp', 
-                          'convert_wav', 'convert_mp3', 'convert_aac', 'convert_flac', 'convert_ogg',
-                          'resize_image', 'convert_video', 'shrink_video', 'transcribe',
-                          'save_first_frame', 'save_last_frame']:
-                if self.get_file_or_show_menu(action):
-                    if action == 'convert_jpg':
-                        self.convert_to_jpg()
-                    elif action == 'convert_png':
-                        self.convert_to_format('png')
-                    elif action == 'convert_webp':
-                        self.convert_to_format('webp')
-                    elif action == 'convert_bmp':
-                        self.convert_to_format('bmp')
-                    elif action == 'convert_wav':
-                        self.convert_audio_to_format('wav')
-                    elif action == 'convert_mp3':
-                        self.convert_audio_to_format('mp3')
-                    elif action == 'convert_aac':
-                        self.convert_audio_to_format('aac')
-                    elif action == 'convert_flac':
-                        self.convert_audio_to_format('flac')
-                    elif action == 'convert_ogg':
-                        self.convert_audio_to_format('ogg')
-                    elif action == 'resize_image':
-                        self.resize_image()
-                    elif action == 'convert_video':
-                        self.convert_video_window()
-                    elif action == 'shrink_video':
-                        self.shrink_video()
-                    elif action == 'transcribe':
-                        self.transcribe_video()
-                    elif action == 'save_first_frame':
-                        self.save_first_frame()
-                    elif action == 'save_last_frame':
-                        self.save_last_frame()
-        
         if self.utility_mode:
-            run_action()
+            self.execute_menu_action(action)
         else:
-            self.run_background_task(run_action)
+            self.run_background_task(self.execute_menu_action, action)
 
     def show_visualizer_companion_menu(self):
         """Show a tray-style popup menu for visualizer and Explorer companion entry."""
@@ -611,7 +780,6 @@ class GGFTray:
         video_menu = tk.Menu(menu, tearoff=0)
         video_menu.add_command(label="Convert Video", command=lambda: invoke_menu_action('convert_video'))
         video_menu.add_command(label="Shrink Video", command=lambda: invoke_menu_action('shrink_video'))
-        video_menu.add_command(label="Transcribe Video", command=lambda: invoke_menu_action('transcribe'))
         video_menu.add_command(label="Download Video", command=lambda: invoke_menu_action('download'))
         video_menu.add_separator()
         video_menu.add_command(label="Save First Frame", command=lambda: invoke_menu_action('save_first_frame'))
@@ -1586,28 +1754,15 @@ class GGFTray:
     def open_app_search(self):
         """Open app search dialog as standalone process"""
         try:
-            app_search_script = os.path.join(SCRIPT_DIR, 'app_search.py')
-            
             if getattr(sys, 'frozen', False):
-                # Running from PyInstaller bundle
-                # Use python.exe from the bundle or just execute the script directly
-                # PyInstaller extracts python.exe to the bundle directory
-                python_exe = os.path.join(os.path.dirname(sys.executable), 'python.exe')
-                if not os.path.exists(python_exe):
-                    # Try pythonw.exe
-                    python_exe = os.path.join(os.path.dirname(sys.executable), 'pythonw.exe')
-                if not os.path.exists(python_exe):
-                    # Fallback: try to execute directly with the system Python
-                    import shutil
-                    python_exe = shutil.which('python') or shutil.which('pythonw')
-                    if not python_exe:
-                        self.show_message("Error", "Cannot find Python interpreter", "error")
-                        return
-                
-                self._app_search_proc = subprocess.Popen([python_exe, app_search_script])
+                self._app_search_proc = self.track_process(subprocess.Popen(
+                    [sys.executable, "--run-app-search"],
+                    cwd=SCRIPT_DIR,
+                    env=get_subprocess_env()
+                ))
             else:
-                # Running as script - use current Python
-                self._app_search_proc = subprocess.Popen([sys.executable, app_search_script])
+                app_search_script = os.path.join(SCRIPT_DIR, 'app_search.py')
+                self._app_search_proc = self.track_process(subprocess.Popen([sys.executable, app_search_script]))
         except Exception as e:
             self.show_message("Error", f"Failed to open app search: {str(e)}", "error")
     
@@ -2198,6 +2353,7 @@ class GGFTray:
         
         # Close visualizer if running
         self.close_audio_visualizer()
+        self.cleanup_helper_processes()
         
         # Kill app_search if open
         try:
@@ -2211,16 +2367,15 @@ class GGFTray:
             print("Stopping icon...")
             self.icon.stop()
         
-        # Get paths
         python = sys.executable
-        script = os.path.abspath(__file__)
-        
-        print(f"Restarting: {python} {script}")
-        
-        # Start new instance using os.startfile or simple Popen
-        # Use start command to properly detach on Windows
+
         import subprocess
-        subprocess.Popen(f'start "" "{python}" "{script}"', shell=True)
+        if getattr(sys, 'frozen', False):
+            subprocess.Popen([python], cwd=SCRIPT_DIR, env=get_subprocess_env())
+        else:
+            script = os.path.abspath(__file__)
+            print(f"Restarting: {python} {script}")
+            subprocess.Popen(f'start "" "{python}" "{script}"', shell=True)
         
         # Exit current process
         print("Exiting current instance...")
@@ -2230,6 +2385,7 @@ class GGFTray:
         """Quit the tray app HARD"""
         self.stop_command_server()
         self.close_audio_visualizer()
+        self.cleanup_helper_processes()
         try:
             if self.icon:
                 self.icon.stop()
@@ -2307,7 +2463,6 @@ class GGFTray:
         video_items = [
             item('Convert Video', lambda: self.open_menu_for('convert_video')),
             item('Shrink Video', lambda: self.open_menu_for('shrink_video')),
-            item('Transcribe Video', lambda: self.open_menu_for('transcribe')),
             item('Download Video', lambda: self.open_menu_for('download')),
             pystray.Menu.SEPARATOR,
             item('Save First Frame', lambda: self.open_menu_for('save_first_frame')),
@@ -2330,6 +2485,7 @@ class GGFTray:
         
         # Bottom items
         menu_items.extend([
+            item('Open Visualizer', lambda: self.open_menu_for('audio_visualizer'), default=True, visible=False),
             item('Member Site', self.open_website),
             item(
                 'Logout from GGF' if (self.auth and self.auth.is_authenticated()) else 'Login to GGF',
@@ -2360,12 +2516,19 @@ class GGFTray:
             "Get Going Fast",
             menu=self.create_menu()
         )
+        self.show_startup_tips_if_needed()
         
         # Run the icon (blocks)
         self.icon.run()
 
 if __name__ == "__main__":
-    if "--install-zip" in sys.argv:
+    if "--run-app-search" in sys.argv:
+        import app_search
+        app_search.main()
+    elif "--run-visualizer" in sys.argv:
+        import audio_visualizer_tray
+        audio_visualizer_tray.main()
+    elif "--install-zip" in sys.argv:
         try:
             zip_arg_index = sys.argv.index("--install-zip") + 1
             zip_path = sys.argv[zip_arg_index]

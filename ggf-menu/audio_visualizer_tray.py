@@ -21,7 +21,13 @@ except ImportError:
     psutil = None
 
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+def get_app_dir():
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+SCRIPT_DIR = get_app_dir()
 CONFIG_PATH = os.path.join(SCRIPT_DIR, "visualizer_config.json")
 STATE_PATH = os.path.join(SCRIPT_DIR, "visualizer_state.json")
 CLICK_THROUGH_TIMEOUT_MS = 30000
@@ -29,6 +35,18 @@ SHORTCUTS_CONFIG = os.path.join(SCRIPT_DIR, "shortcuts.txt")
 TRAY_IPC_HOST = "127.0.0.1"
 TRAY_IPC_PORT = 47653
 TRAY_IPC_BUFFER = 65536
+LOG_PATH = os.path.join(SCRIPT_DIR, "visualizer_debug.log")
+
+
+def log_visualizer(message):
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    line = f"[{timestamp}] {message}"
+    print(line)
+    try:
+        with open(LOG_PATH, "a", encoding="utf-8") as file_handle:
+            file_handle.write(line + "\n")
+    except Exception:
+        pass
 
 
 class SettingsWindow(QWidget):
@@ -448,6 +466,13 @@ class VisualizerWindow(QMainWindow):
             response = self.send_tray_command(command, **payload)
             if response.get("ok"):
                 return True
+            error_message = response.get("error")
+            if error_message:
+                self.show_status_message(
+                    "GGF Tray Error",
+                    f"The tray returned an error:\n\n{error_message}"
+                )
+                return False
         except Exception as e:
             print(f"Tray command failed: {e}")
 
@@ -537,7 +562,6 @@ class VisualizerWindow(QMainWindow):
         for label, action_name in [
             ("Convert Video", "convert_video"),
             ("Shrink Video", "shrink_video"),
-            ("Transcribe Video", "transcribe"),
             ("Download Video", "download"),
             ("Save First Frame", "save_first_frame"),
             ("Save Last Frame", "save_last_frame"),
@@ -1866,13 +1890,14 @@ animate();
             
             try:
                 wasapi_info = p.get_host_api_info_by_type(pyaudio.paWASAPI)
-                print(f"WASAPI host API index: {wasapi_info['index']}")
+                log_visualizer(f"WASAPI host API index: {wasapi_info['index']}")
             except OSError:
-                print("WASAPI not available")
+                log_visualizer("WASAPI not available")
                 p.terminate()
                 return devices
             
             loopback_devices = list(p.get_loopback_device_info_generator())
+            log_visualizer(f"Found {len(loopback_devices)} loopback devices")
             
             for i, loopback in enumerate(loopback_devices):
                 channels = int(loopback['maxInputChannels'])
@@ -1884,10 +1909,14 @@ animate();
                         'channels': channels,
                         'rate': int(loopback['defaultSampleRate'])
                     })
+                    log_visualizer(
+                        f"Loopback device ready: index={loopback['index']} "
+                        f"name={loopback['name']} channels={channels} rate={int(loopback['defaultSampleRate'])}"
+                    )
             
             p.terminate()
         except Exception as e:
-            print(f"Error getting audio devices: {e}")
+            log_visualizer(f"Error getting audio devices: {e}")
             
         return devices
     
@@ -1900,6 +1929,7 @@ animate();
         
         if not devices:
             self.device_error.emit("No audio loopback devices found.")
+            log_visualizer("No loopback devices found during startup")
             return
         
         saved_device_name = self.config.get('selectedDeviceName')
@@ -1911,6 +1941,7 @@ animate();
                     
                     if self.quick_test_audio_device():
                         self.device_working = True
+                        log_visualizer(f"Using saved audio device: {device['name']} ({device['index']})")
                         self.device_success.emit(f"Audio device: {device['name']}")
                         self.start_audio_capture()
                         return
@@ -1922,6 +1953,7 @@ animate();
                 self.device_working = True
                 self.config['selectedDeviceName'] = device['name']
                 self.config['selectedDeviceIndex'] = device['index']
+                log_visualizer(f"Using fallback audio device: {device['name']} ({device['index']})")
                 
                 try:
                     with open(CONFIG_PATH, 'w') as f:
@@ -1932,6 +1964,9 @@ animate();
                 self.device_success.emit(f"Audio device: {device['name']}")
                 self.start_audio_capture()
                 return
+
+        log_visualizer("Loopback devices were found but none could be opened successfully")
+        self.device_error.emit("Audio loopback device could not be opened.")
     
     def quick_test_audio_device(self):
         try:
@@ -1952,14 +1987,17 @@ animate();
                 input_device_index=self.selected_device_index
             )
             
-            data = stream.read(128, exception_on_overflow=False)
             stream.stop_stream()
             stream.close()
             p.terminate()
             
-            audio_int = np.frombuffer(data, dtype=np.int16)
-            return np.max(np.abs(audio_int)) > 0
-        except:
+            log_visualizer(
+                f"Device probe succeeded: index={self.selected_device_index} "
+                f"name={device_info.get('name')}"
+            )
+            return True
+        except Exception as exc:
+            log_visualizer(f"Device probe failed for index={self.selected_device_index}: {exc}")
             return False
         
     def start_audio_capture(self):
@@ -1972,6 +2010,7 @@ animate();
         self.audio_thread = threading.Thread(target=self.audio_capture_thread, daemon=True)
         self.audio_thread.start()
         self.device_working = True
+        log_visualizer(f"Started audio capture thread for device index={self.selected_device_index}")
         
     def on_device_changed(self, device_index):
         devices = self.get_audio_devices()
@@ -2060,9 +2099,11 @@ animate();
         try:
             p = pyaudio.PyAudio()
             device_info = p.get_device_info_by_index(self.selected_device_index)
+            log_visualizer(f"Opening audio capture stream for {device_info.get('name')} ({device_info.get('index')})")
             
             CHANNELS = int(device_info["maxInputChannels"])
             if CHANNELS == 0:
+                log_visualizer("Audio capture aborted because the selected device has zero input channels")
                 return
             
             if CHANNELS > 2:
@@ -2102,12 +2143,13 @@ animate();
                     
                 except Exception as e:
                     if not self.audio_stop_event.is_set():
+                        log_visualizer(f"Audio stream read error: {e}")
                         continue
                     else:
                         break
                     
-        except:
-            pass
+        except Exception as exc:
+            log_visualizer(f"Audio capture startup failed: {exc}")
         finally:
             if stream:
                 try:
@@ -2322,13 +2364,18 @@ def load_config():
     return default_config
 
 
-if __name__ == '__main__':
+def main():
     print("\n" + "="*60)
     print("STARTING AUDIO VISUALIZER (7 Modes)")
     print("="*60)
+    log_visualizer("Launching visualizer")
     
     app = QApplication(sys.argv)
     config = load_config()
     window = VisualizerWindow(config)
     window.show()
     sys.exit(app.exec())
+
+
+if __name__ == '__main__':
+    main()

@@ -21,7 +21,23 @@ from PyQt6.QtCore import Qt, QTimer, QUrl, QThread, pyqtSignal
 
 # --- Logging ---
 import datetime
-_LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'app_search_log.txt')
+
+
+def get_app_dir():
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def get_subprocess_env():
+    env = os.environ.copy()
+    if getattr(sys, 'frozen', False):
+        env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    return env
+
+
+APP_DIR = get_app_dir()
+_LOG_FILE = os.path.join(APP_DIR, 'app_search_log.txt')
 def _log(msg):
     ts = datetime.datetime.now().strftime('%H:%M:%S.%f')[:-3]
     line = f"[{ts}] {msg}"
@@ -46,7 +62,7 @@ try:
     from ggf_auth_token import AuthManager
 except ImportError:
     # If running from different directory, try to import from same directory
-    script_dir = os.path.dirname(os.path.abspath(__file__))
+    script_dir = APP_DIR
     sys.path.insert(0, script_dir)
     from ggf_auth_token import AuthManager
 
@@ -580,14 +596,22 @@ class SearchDialog(QWidget):
             shutil.move(file_path, permanent_path)
             installer_opened = False
             try:
-                script_dir = os.path.dirname(os.path.abspath(__file__))
-                tray_script = os.path.join(script_dir, "ggf-tray.py")
+                script_dir = APP_DIR
                 creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP") else 0
-                subprocess.Popen(
-                    [sys.executable, tray_script, "--install-zip", permanent_path, "--auto-install"],
-                    cwd=script_dir,
-                    creationflags=creationflags
-                )
+                if getattr(sys, 'frozen', False):
+                    subprocess.Popen(
+                        [sys.executable, "--install-zip", permanent_path, "--auto-install"],
+                        cwd=script_dir,
+                        creationflags=creationflags,
+                        env=get_subprocess_env()
+                    )
+                else:
+                    tray_script = os.path.join(script_dir, "ggf-tray.py")
+                    subprocess.Popen(
+                        [sys.executable, tray_script, "--install-zip", permanent_path, "--auto-install"],
+                        cwd=script_dir,
+                        creationflags=creationflags
+                    )
                 installer_opened = True
             except Exception as e:
                 QMessageBox.warning(self, "Installer Error",
