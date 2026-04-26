@@ -12,9 +12,11 @@ ggf-menu/whisper_venv/
 # Build artifacts
 build/
 dist/
+release/
 buildbackup/
 BACKUP/
 Hold App/
+test/
 ggf-menu/build/
 ggf-menu/dist/
 ggf-menu/buildbackup/
