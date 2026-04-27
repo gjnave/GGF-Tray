@@ -17,6 +17,7 @@ python -m PyInstaller ^
   --workpath build_onefile ^
   --icon "logo.ico" ^
   --add-data "logo.ico;." ^
+  --collect-all numpy ^
   --collect-all pyaudiowpatch ^
   --hidden-import app_search ^
   --hidden-import audio_visualizer_tray ^
