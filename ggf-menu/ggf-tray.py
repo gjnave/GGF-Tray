@@ -1321,13 +1321,15 @@ class GGFTray:
             install_bat = None
             run_bat = None
             
+            installer_selection_note = None
+
             # Collect installer files
             installer_files = []
             for root_dir, dirs, files in os.walk(install_dir):
                 for file in files:
-                    if file.endswith('.bat'):
+                    if file.endswith('.bat') or file.endswith('.exe'):
                         file_lower = file.lower()
-                        # Look for installer files (but not uninstallers)
+                        # Treat any filename containing "install" as an installer candidate.
                         if ('install' in file_lower or 'setup' in file_lower) and 'uninstall' not in file_lower:
                             installer_files.append(os.path.join(root_dir, file))
             
@@ -1337,63 +1339,79 @@ class GGFTray:
                 for file in files:
                     if file.endswith('.bat') or file.endswith('.exe'):
                         file_lower = file.lower()
-                        # Look for launcher files
-                        if ('run' in file_lower or 'start' in file_lower or 'launch' in file_lower) and 'uninstall' not in file_lower:
+                        # Keep launcher matching separate from installers so a run file
+                        # cannot win when an install file is present.
+                        if (
+                            ('run' in file_lower or 'start' in file_lower or 'launch' in file_lower)
+                            and 'uninstall' not in file_lower
+                            and 'install' not in file_lower
+                            and 'setup' not in file_lower
+                        ):
                             launcher_files.append(os.path.join(root_dir, file))
             
             # Smart installer selection
             if installer_files:
-                # Try to find the best installer using priority rules
                 best_installer = None
-                
-                # Priority 1: Contains "installer" in name (highest priority)
-                for installer in installer_files:
-                    if 'installer' in os.path.basename(installer).lower():
-                        best_installer = installer
-                        break
-                
-                # Priority 2: Contains zip name in installer name
-                if not best_installer:
-                    for installer in installer_files:
-                        if zip_name.lower() in os.path.basename(installer).lower():
-                            best_installer = installer
-                            break
-                
-                # Priority 3: First installer that doesn't contain "click" or "manual"
-                if not best_installer:
+
+                install_name_matches = [
+                    path for path in installer_files
+                    if 'install' in os.path.basename(path).lower()
+                ]
+                zip_name_matches = [
+                    path for path in install_name_matches
+                    if zip_name.lower() in os.path.basename(path).lower()
+                ]
+
+                if len(zip_name_matches) == 1:
+                    best_installer = zip_name_matches[0]
+                elif len(install_name_matches) == 1:
+                    best_installer = install_name_matches[0]
+                elif not install_name_matches:
+                    setup_matches = [
+                        path for path in installer_files
+                        if 'setup' in os.path.basename(path).lower()
+                    ]
+                    if len(setup_matches) == 1:
+                        best_installer = setup_matches[0]
+
+                if not best_installer and not auto_confirm:
                     for installer in installer_files:
                         installer_name = os.path.basename(installer).lower()
                         if 'click' not in installer_name and 'manual' not in installer_name:
                             best_installer = installer
                             break
-                
-                # Priority 4: Just use the first one
-                if not best_installer:
+
+                if not best_installer and installer_files and not auto_confirm:
                     best_installer = installer_files[0]
-                
-                # Ask user if this is the right installer
-                installer_name = os.path.basename(best_installer)
-                if auto_confirm or messagebox.askyesno(
-                    "Installer Found",
-                    f"Found installer: {installer_name}\n\n"
-                    f"Is this the correct installer to run?",
-                    parent=tk.Tk()
-                ):
-                    install_bat = best_installer
-                else:
-                    # Let user browse for the correct installer
-                    browse_root = tk.Tk()
-                    browse_root.withdraw()
-                    browse_root.attributes('-topmost', True)
-                    custom_installer = filedialog.askopenfilename(
-                        title="Select the installer file",
-                        initialdir=install_dir,
-                        filetypes=[("Batch files", "*.bat"), ("Executables", "*.exe"), ("All files", "*.*")],
-                        parent=browse_root
+
+                if auto_confirm and not best_installer:
+                    installer_selection_note = (
+                        "Downloaded and extracted the app, but I found multiple possible installer files "
+                        "and could not safely choose one automatically. Please open the extracted folder "
+                        "and run the installer manually."
                     )
-                    browse_root.destroy()
-                    if custom_installer:
-                        install_bat = custom_installer
+                elif best_installer:
+                    installer_name = os.path.basename(best_installer)
+                    if auto_confirm or messagebox.askyesno(
+                        "Installer Found",
+                        f"Found installer: {installer_name}\n\n"
+                        f"Is this the correct installer to run?",
+                        parent=tk.Tk()
+                    ):
+                        install_bat = best_installer
+                    else:
+                        browse_root = tk.Tk()
+                        browse_root.withdraw()
+                        browse_root.attributes('-topmost', True)
+                        custom_installer = filedialog.askopenfilename(
+                            title="Select the installer file",
+                            initialdir=install_dir,
+                            filetypes=[("Batch files", "*.bat"), ("Executables", "*.exe"), ("All files", "*.*")],
+                            parent=browse_root
+                        )
+                        browse_root.destroy()
+                        if custom_installer:
+                            install_bat = custom_installer
             
             # Smart launcher selection (similar logic)
             if launcher_files and not is_comfyui_install:
@@ -1498,6 +1516,9 @@ class GGFTray:
                 apps_config = os.path.join(SCRIPT_DIR, 'installed_apps.txt')
                 with open(apps_config, 'a', encoding='utf-8') as f:
                     f.write(f"\n{folder_name}={install_dir}")
+
+            if installer_selection_note:
+                self.show_message("Manual Install Needed", installer_selection_note, "warning")
             
         except Exception as e:
             self.show_message("Error", f"Failed to install:\n{str(e)}", "error")
