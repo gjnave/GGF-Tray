@@ -1335,10 +1335,13 @@ class GGFTray:
             
             # Collect launcher files
             launcher_files = []
+            executable_candidates = []
             for root_dir, dirs, files in os.walk(install_dir):
                 for file in files:
                     if file.endswith('.bat') or file.endswith('.exe'):
                         file_lower = file.lower()
+                        if file_lower.endswith('.exe') and 'uninstall' not in file_lower:
+                            executable_candidates.append(os.path.join(root_dir, file))
                         # Keep launcher matching separate from installers so a run file
                         # cannot win when an install file is present.
                         if (
@@ -1414,6 +1417,28 @@ class GGFTray:
                             install_bat = custom_installer
             
             # Smart launcher selection (similar logic)
+            if not launcher_files and not is_comfyui_install:
+                portable_executables = []
+                for candidate in executable_candidates:
+                    candidate_name = os.path.basename(candidate).lower()
+                    if candidate == install_bat:
+                        continue
+                    if any(token in candidate_name for token in ['install', 'setup', 'update', 'unins']):
+                        continue
+                    portable_executables.append(candidate)
+
+                if len(portable_executables) == 1:
+                    launcher_files = portable_executables
+                elif len(portable_executables) > 1:
+                    zip_name_tokens = [token for token in zip_name.lower().replace('-', ' ').replace('_', ' ').split() if token]
+                    matching_portables = []
+                    for candidate in portable_executables:
+                        candidate_name = os.path.basename(candidate).lower()
+                        if any(token in candidate_name for token in zip_name_tokens):
+                            matching_portables.append(candidate)
+                    if len(matching_portables) == 1:
+                        launcher_files = matching_portables
+
             if launcher_files and not is_comfyui_install:
                 best_launcher = None
                 
@@ -1465,6 +1490,14 @@ class GGFTray:
                     browse_root.destroy()
                     if custom_launcher:
                         run_bat = custom_launcher
+
+            if not run_bat and not is_comfyui_install and executable_candidates:
+                fallback_note = (
+                    "Installer launched, but GGF Tray could not confidently identify the app launcher. "
+                    "The files were extracted successfully, so you may need to add the app to Quick Launch manually."
+                )
+            else:
+                fallback_note = None
             
             # Run install.bat with admin privileges if found
             if install_bat:
@@ -1519,6 +1552,8 @@ class GGFTray:
 
             if installer_selection_note:
                 self.show_message("Manual Install Needed", installer_selection_note, "warning")
+            elif fallback_note:
+                self.show_message("Manual Quick Launch Needed", fallback_note, "warning")
             
         except Exception as e:
             self.show_message("Error", f"Failed to install:\n{str(e)}", "error")
