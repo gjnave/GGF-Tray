@@ -73,9 +73,13 @@ jobs:
           @"
           ## GGF Tray $tag
 
-          ![GGF Banner]($base/youtube-banner.jpg)
+          <p align="center">
+            <img src="$base/youtube-banner.jpg" alt="GGF Banner" width="720" />
+          </p>
 
-          ![GGF Logo]($base/logo.png)
+          <p align="center">
+            <img src="$base/logo.png" alt="GGF Logo" width="180" />
+          </p>
 
           ### What's in this release
 
@@ -87,7 +91,9 @@ jobs:
 
           - `GGF-Tray-OneFile.exe`
 
-          ![Founder]($base/founder.jpg)
+          <p align="center">
+            <img src="$base/founder.jpg" alt="Founder" width="260" />
+          </p>
           "@ | Set-Content -Path release_notes.md -Encoding UTF8
 
       - name: Upload workflow artifact
