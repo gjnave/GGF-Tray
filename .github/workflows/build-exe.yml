@@ -1,0 +1,53 @@
+name: Build GGF Tray EXE
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pyinstaller
+          python -m pip install -r ggf-menu/requirements.txt
+
+      - name: Build EXE
+        shell: pwsh
+        run: |
+          python -m PyInstaller `
+            --noconfirm `
+            --clean `
+            --onefile `
+            --windowed `
+            --name GGF-Tray-OneFile `
+            --distpath ggf-menu/dist_onefile `
+            --workpath ggf-menu/build_onefile `
+            --icon ggf-menu/logo.ico `
+            --add-data "ggf-menu/logo.ico;." `
+            --collect-all pyaudiowpatch `
+            --hidden-import app_search `
+            --hidden-import audio_visualizer_tray `
+            --hidden-import ggf_auth_token `
+            --hidden-import PyQt6.QtWebEngineWidgets `
+            ggf-menu/ggf-tray.py
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ggf-tray-onefile
+          path: ggf-menu/dist_onefile/GGF-Tray-OneFile.exe
