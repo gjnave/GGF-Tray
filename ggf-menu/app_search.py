@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout,
                              QLineEdit, QComboBox, QListWidget, QLabel, 
                              QPushButton, QListWidgetItem, QProgressBar, QMessageBox)
 from PyQt6.QtCore import Qt, QTimer, QUrl, QThread, pyqtSignal
+from ggf_runtime import configure_ssl_environment, urlopen_with_ssl
 
 # --- Logging ---
 import datetime
@@ -33,10 +34,11 @@ def get_subprocess_env():
     env = os.environ.copy()
     if getattr(sys, 'frozen', False):
         env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
-    return env
+    return configure_ssl_environment(env)
 
 
 APP_DIR = get_app_dir()
+configure_ssl_environment()
 _LOG_FILE = os.path.join(APP_DIR, 'app_search_log.txt')
 def _log(msg):
     ts = datetime.datetime.now().strftime('%H:%M:%S.%f')[:-3]
@@ -91,7 +93,7 @@ class DownloadWorker(QThread):
             # Single request - read header AND body from same connection
             _log("Opening URL connection...")
             req = urllib.request.Request(self.download_url, headers={'User-Agent': 'GGF-AppSearch/1.0'})
-            response = urllib.request.urlopen(req)
+            response = urlopen_with_ssl(req)
             _log(f"Response status: {response.status}")
             _log(f"Response URL (after redirects): {response.url}")
             _log(f"Response headers: {dict(response.headers)}")
@@ -469,7 +471,7 @@ class SearchDialog(QWidget):
     def load_tools(self):
         """Load tools from JSON"""
         try:
-            with urllib.request.urlopen('https://getgoingfast.pro/tools/tools-list.json', timeout=10) as response:
+            with urlopen_with_ssl('https://getgoingfast.pro/tools/tools-list.json', timeout=10) as response:
                 data = json.loads(response.read().decode())
                 self.tools_data = data.get('tools', [])
                 self.filter_results()

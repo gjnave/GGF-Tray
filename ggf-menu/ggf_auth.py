@@ -10,6 +10,9 @@ import urllib.error
 import webbrowser
 import secrets
 from datetime import datetime, timedelta
+from ggf_runtime import configure_ssl_environment, urlopen_with_ssl
+
+configure_ssl_environment()
 
 class AuthManager:
     def __init__(self, cache_file="auth_cache.json"):
@@ -65,7 +68,7 @@ class AuthManager:
             req = urllib.request.Request(url)
             req.add_header('User-Agent', 'GGF-Tray-App/1.0')
             
-            with urllib.request.urlopen(req, timeout=10) as response:
+            with urlopen_with_ssl(req, timeout=10) as response:
                 data = json.loads(response.read().decode('utf-8'))
                 
                 if data.get('authenticated'):

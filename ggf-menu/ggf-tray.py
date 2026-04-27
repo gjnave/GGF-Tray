@@ -17,6 +17,12 @@ import ctypes
 import socket
 import time
 from ctypes import wintypes
+from ggf_runtime import (
+    configure_ssl_environment,
+    get_ffmpeg_executable,
+    launch_console_command,
+    urlopen_with_ssl,
+)
 
 # ============================================================================
 # DISABLE ALL BEEPS - Multiple approaches to ensure silence
@@ -87,7 +93,7 @@ def get_subprocess_env():
     env = os.environ.copy()
     if getattr(sys, 'frozen', False):
         env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
-    return env
+    return configure_ssl_environment(env)
 
 
 RESOURCE_DIR = get_resource_dir()
@@ -106,6 +112,7 @@ UTILITY_ARGS = {"--install-zip", "--show-visualizer-menu", "--show-companion-men
 TRAY_IPC_HOST = "127.0.0.1"
 TRAY_IPC_PORT = 47653
 TRAY_IPC_BUFFER = 65536
+configure_ssl_environment()
 
 def check_already_running():
     """Check if another instance is already running using Windows mutex"""
@@ -841,11 +848,26 @@ class GGFTray:
             # Run yt-dlp
             try:
                 download_dir = os.path.expanduser("~\\Downloads")
-                subprocess.Popen(['start', 'cmd', '/k', 'yt-dlp', '-o', 
-                                os.path.join(download_dir, '%(title)s.%(ext)s'), url],
-                                shell=True)
+                command = ['yt-dlp', '-o', os.path.join(download_dir, '%(title)s.%(ext)s')]
+                ffmpeg_exe = get_ffmpeg_executable()
+                if ffmpeg_exe:
+                    command.extend(['--ffmpeg-location', os.path.dirname(ffmpeg_exe)])
+                command.append(url)
+                launch_console_command(command, cwd=download_dir, env=get_subprocess_env())
             except Exception as e:
                 self.show_message("Error", f"Failed to download:\n{str(e)}", "error")
+
+    def get_ffmpeg_command_prefix(self):
+        ffmpeg_exe = get_ffmpeg_executable()
+        if not ffmpeg_exe:
+            raise RuntimeError(
+                "FFmpeg is not available in this build. Please rebuild the EXE with bundled FFmpeg support."
+            )
+        return [ffmpeg_exe]
+
+    def launch_ffmpeg(self, args, keep_open=True):
+        command = self.get_ffmpeg_command_prefix() + list(args)
+        return launch_console_command(command, cwd=os.path.dirname(self.current_file), keep_open=keep_open)
     
     def convert_to_jpg(self):
         """Convert image to JPG"""
@@ -891,25 +913,22 @@ class GGFTray:
             config = get_config()
             audio_bitrate = config.get('Video', 'audio_bitrate', fallback='192k')
             
-            # Escape quotes for cmd.exe
-            input_escaped = self.current_file.replace('"', '""')
-            output_escaped = output.replace('"', '""')
-            
-            # Use appropriate codec for format
+            ffmpeg_args = ["-i", self.current_file]
             if format_ext == 'mp3':
-                cmd = f'start cmd /k ffmpeg -i "{input_escaped}" -acodec libmp3lame -b:a {audio_bitrate} "{output_escaped}" -y'
+                ffmpeg_args += ["-acodec", "libmp3lame", "-b:a", audio_bitrate]
             elif format_ext == 'wav':
-                cmd = f'start cmd /k ffmpeg -i "{input_escaped}" -acodec pcm_s16le "{output_escaped}" -y'
+                ffmpeg_args += ["-acodec", "pcm_s16le"]
             elif format_ext == 'ogg':
-                cmd = f'start cmd /k ffmpeg -i "{input_escaped}" -acodec libvorbis -b:a {audio_bitrate} "{output_escaped}" -y'
+                ffmpeg_args += ["-acodec", "libvorbis", "-b:a", audio_bitrate]
             elif format_ext == 'aac':
-                cmd = f'start cmd /k ffmpeg -i "{input_escaped}" -acodec aac -b:a {audio_bitrate} "{output_escaped}" -y'
+                ffmpeg_args += ["-acodec", "aac", "-b:a", audio_bitrate]
             elif format_ext == 'flac':
-                cmd = f'start cmd /k ffmpeg -i "{input_escaped}" -acodec flac "{output_escaped}" -y'
+                ffmpeg_args += ["-acodec", "flac"]
             else:
-                cmd = f'start cmd /k ffmpeg -i "{input_escaped}" -acodec copy "{output_escaped}" -y'
-            
-            subprocess.Popen(cmd, shell=True)
+                ffmpeg_args += ["-acodec", "copy"]
+
+            ffmpeg_args += ["-y", output]
+            self.launch_ffmpeg(ffmpeg_args)
             self.show_message("Converting", f"Converting to {format_ext.upper()}...\n\nOutput: {output}")
         except Exception as e:
             self.show_message("Error", f"Failed to convert audio:\n{str(e)}", "error")
@@ -975,22 +994,18 @@ class GGFTray:
             audio_codec = config.get('Video', 'audio_codec', fallback='aac')
             audio_bitrate = config.get('Video', 'audio_bitrate', fallback='192k')
             
-            # Escape quotes for cmd.exe
-            video_file_escaped = self.current_file.replace('"', '""')
-            output_escaped = output.replace('"', '""')
-            
-            # Special handling for GIF
+            ffmpeg_args = ["-i", self.current_file]
             if output_ext == ".gif":
                 fps = config.get('Video', 'gif_fps', fallback='10')
                 scale = config.get('Video', 'gif_scale', fallback='480')
-                cmd = f'start cmd /k ffmpeg -i "{video_file_escaped}" -vf "fps={fps},scale={scale}:-1:flags=lanczos" "{output_escaped}" -y'
-            # Special handling for WebM - requires VP9 and Opus
+                ffmpeg_args += ["-vf", f"fps={fps},scale={scale}:-1:flags=lanczos"]
             elif output_ext == ".webm":
-                cmd = f'start cmd /k ffmpeg -i "{video_file_escaped}" -c:v libvpx-vp9 -crf {crf} -b:v 0 -c:a libopus -b:a {audio_bitrate} "{output_escaped}" -y'
+                ffmpeg_args += ["-c:v", "libvpx-vp9", "-crf", crf, "-b:v", "0", "-c:a", "libopus", "-b:a", audio_bitrate]
             else:
-                cmd = f'start cmd /k ffmpeg -i "{video_file_escaped}" -c:v {video_codec} -preset {preset} -crf {crf} -c:a {audio_codec} -b:a {audio_bitrate} "{output_escaped}" -y'
-            
-            subprocess.Popen(cmd, shell=True)
+                ffmpeg_args += ["-c:v", video_codec, "-preset", preset, "-crf", crf, "-c:a", audio_codec, "-b:a", audio_bitrate]
+
+            ffmpeg_args += ["-y", output]
+            self.launch_ffmpeg(ffmpeg_args)
             self.show_message("Converting", f"Converting to {output_ext.upper()}...\n\nOutput: {output}")
             window.destroy()
         
@@ -1002,27 +1017,24 @@ class GGFTray:
             config = get_config()
             audio_bitrate = config.get('Video', 'audio_bitrate', fallback='192k')
             
-            # Escape quotes for cmd.exe
-            video_file_escaped = self.current_file.replace('"', '""')
-            output_escaped = output.replace('"', '""')
-            
-            # Use appropriate codec for format
+            ffmpeg_args = ["-i", self.current_file, "-vn"]
             if output_ext == ".mp3":
-                cmd = f'start cmd /k ffmpeg -i "{video_file_escaped}" -vn -acodec libmp3lame -b:a {audio_bitrate} "{output_escaped}" -y'
+                ffmpeg_args += ["-acodec", "libmp3lame", "-b:a", audio_bitrate]
             elif output_ext == ".wav":
-                cmd = f'start cmd /k ffmpeg -i "{video_file_escaped}" -vn -acodec pcm_s16le "{output_escaped}" -y'
+                ffmpeg_args += ["-acodec", "pcm_s16le"]
             elif output_ext == ".ogg":
-                cmd = f'start cmd /k ffmpeg -i "{video_file_escaped}" -vn -acodec libvorbis -b:a {audio_bitrate} "{output_escaped}" -y'
+                ffmpeg_args += ["-acodec", "libvorbis", "-b:a", audio_bitrate]
             elif output_ext == ".aac":
-                cmd = f'start cmd /k ffmpeg -i "{video_file_escaped}" -vn -acodec aac -b:a {audio_bitrate} "{output_escaped}" -y'
+                ffmpeg_args += ["-acodec", "aac", "-b:a", audio_bitrate]
             elif output_ext == ".flac":
-                cmd = f'start cmd /k ffmpeg -i "{video_file_escaped}" -vn -acodec flac "{output_escaped}" -y'
+                ffmpeg_args += ["-acodec", "flac"]
             elif output_ext == ".m4a":
-                cmd = f'start cmd /k ffmpeg -i "{video_file_escaped}" -vn -acodec aac -b:a {audio_bitrate} "{output_escaped}" -y'
+                ffmpeg_args += ["-acodec", "aac", "-b:a", audio_bitrate]
             else:
-                cmd = f'start cmd /k ffmpeg -i "{video_file_escaped}" -vn -acodec copy "{output_escaped}" -y'
-            
-            subprocess.Popen(cmd, shell=True)
+                ffmpeg_args += ["-acodec", "copy"]
+
+            ffmpeg_args += ["-y", output]
+            self.launch_ffmpeg(ffmpeg_args)
             window.destroy()
         
         # Create UI
@@ -1088,12 +1100,16 @@ class GGFTray:
         try:
             output = os.path.splitext(self.current_file)[0] + '_shrunk.mp4'
             
-            # Escape quotes for cmd.exe
-            video_file_escaped = self.current_file.replace('"', '""')
-            output_escaped = output.replace('"', '""')
-            
-            cmd = f'start cmd /k ffmpeg -i "{video_file_escaped}" -vf scale=-2:1080 -c:v libx264 -b:v 2000k -c:a aac -b:a 128k "{output_escaped}" -y'
-            subprocess.Popen(cmd, shell=True)
+            self.launch_ffmpeg([
+                "-i", self.current_file,
+                "-vf", "scale=-2:1080",
+                "-c:v", "libx264",
+                "-b:v", "2000k",
+                "-c:a", "aac",
+                "-b:a", "128k",
+                "-y",
+                output,
+            ])
         except Exception as e:
             self.show_message("Error", f"Failed to shrink:\n{str(e)}", "error")
     
@@ -1155,13 +1171,13 @@ class GGFTray:
             base_name = os.path.splitext(self.current_file)[0]
             output = base_name + '_first_frame.png'
             
-            # Escape quotes for cmd.exe
-            video_file_escaped = self.current_file.replace('"', '""')
-            output_escaped = output.replace('"', '""')
-            
-            # Use ffmpeg to extract first frame
-            cmd = f'start cmd /k ffmpeg -i "{video_file_escaped}" -vf "select=eq(n\\,0)" -vsync vfr "{output_escaped}" -y && echo First frame saved to: {output_escaped} && pause'
-            subprocess.Popen(cmd, shell=True)
+            self.launch_ffmpeg([
+                "-i", self.current_file,
+                "-vf", "select=eq(n\\,0)",
+                "-vsync", "vfr",
+                "-y",
+                output,
+            ])
            
             
         except Exception as e:
@@ -1174,13 +1190,14 @@ class GGFTray:
             base_name = os.path.splitext(self.current_file)[0]
             output = base_name + '_last_frame.png'
             
-            # Escape quotes for cmd.exe
-            video_file_escaped = self.current_file.replace('"', '""')
-            output_escaped = output.replace('"', '""')
-            
-            # Use ffmpeg to extract last frame
-            cmd = f'start cmd /k ffmpeg -sseof -1 -i "{video_file_escaped}" -vf "select=eq(n\\,0)" -vsync vfr "{output_escaped}" -y && echo Last frame saved to: {output_escaped} && pause'
-            subprocess.Popen(cmd, shell=True)      
+            self.launch_ffmpeg([
+                "-sseof", "-1",
+                "-i", self.current_file,
+                "-vf", "select=eq(n\\,0)",
+                "-vsync", "vfr",
+                "-y",
+                output,
+            ])
             
         except Exception as e:
             self.show_message("Error", f"Failed to save last frame:\n{str(e)}", "error")
@@ -1884,7 +1901,7 @@ class GGFTray:
                     "Accept": "application/json"
                 }
             )
-            with urllib.request.urlopen(request, timeout=timeout) as response:
+            with urlopen_with_ssl(request, timeout=timeout) as response:
                 return json.loads(response.read().decode())
         
         def search_huggingface(load_more=False):
@@ -2239,7 +2256,7 @@ class GGFTray:
                             window.update()
                     
                     request = urllib.request.Request(url, headers={"User-Agent": "GGF-Tray/1.0"})
-                    with urllib.request.urlopen(request, timeout=30) as response, open(output_file, 'wb') as out_file:
+                    with urlopen_with_ssl(request, timeout=30) as response, open(output_file, 'wb') as out_file:
                         total_size = int(response.headers.get('Content-Length') or 0)
                         block_size = 1024 * 1024
                         count = 0

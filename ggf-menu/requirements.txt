@@ -4,6 +4,8 @@ yt-dlp>=2023.3.4
 psutil>=5.9.0
 # whisper-openai
 numpy
+certifi
+imageio-ffmpeg
 PyQt6
 PyQt6-WebEngine
 pyaudiowpatch

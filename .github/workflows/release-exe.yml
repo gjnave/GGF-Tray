@@ -56,6 +56,8 @@ jobs:
             --workpath ggf-menu/build_onefile `
             --icon ggf-menu/logo.ico `
             --add-data "ggf-menu/logo.ico;." `
+            --collect-all certifi `
+            --collect-all imageio_ffmpeg `
             --collect-all numpy `
             --collect-all pyaudiowpatch `
             --hidden-import app_search `
