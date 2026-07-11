@@ -65,3 +65,9 @@ ggf-menu/build-venv/
 # Stray/scratch files
 ggf-menu/6.10
 ggf-menu/icon-preview.png
+
+# Per-user runtime state — never ship personal shortcuts/apps/config in distro
+ggf-menu/shortcuts.txt
+ggf-menu/installed_apps.txt
+ggf-menu/visualizer_config.json
+ggf-menu/auth_cache.dat

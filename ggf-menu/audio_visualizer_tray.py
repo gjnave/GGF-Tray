@@ -269,6 +269,12 @@ class SettingsWindow(QWidget):
         # Use hide() instead of close() to avoid Qt lifecycle issues
         self.hide()
 
+    def closeEvent(self, event):
+        # The window's X button should just HIDE Settings (like the Close button),
+        # never tear down the visualizer running behind it.
+        event.ignore()
+        self.hide()
+
 
 class VisualizerWindow(QMainWindow):
     device_error = pyqtSignal(str)
@@ -2508,7 +2514,9 @@ def main():
         return 0
     
     app = QApplication(sys.argv)
-    app.setQuitOnLastWindowClosed(True)
+    # Only an explicit Quit (or the visualizer's own close) should end the app --
+    # closing a child window like Settings must never quit the whole visualizer.
+    app.setQuitOnLastWindowClosed(False)
     config = load_config()
     window = VisualizerWindow(config)
     window.show()
