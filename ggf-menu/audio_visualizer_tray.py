@@ -408,14 +408,18 @@ class VisualizerWindow(QMainWindow):
             if getattr(self, '_tour_overlay', None) is not None:
                 return
             steps = [
-                ("🎵  Welcome to the GGF Music Visualizer!\n\n"
-                 "It reacts live to whatever audio is playing on your PC — "
-                 "play a song and watch it move.", False),
-                ("Click the “Menu” button in the bottom-right corner for "
-                 "visual modes, particle and speed settings, and to choose which "
-                 "speakers it listens to.", False),
-                ("You’re all set — enjoy the show!\n\n"
-                 "You can reopen the visualizer anytime from the GGF tray menu.", True),
+                ("👋  Welcome to the GGF Toolbar!\n\n"
+                 "It lives in your system tray and puts AI apps, media tools, and "
+                 "utilities one click away. (This music visualizer is just one of "
+                 "its features — it's what's loading right now.)", False),
+                ("Click the “Menu” button in the bottom-right corner to open the "
+                 "toolbar — the same menu you get by right-clicking the GGF tray "
+                 "icon:\n\n"
+                 "•  Search & install AI apps\n"
+                 "•  Convert images, audio & video\n"
+                 "•  Utilities, settings & this visualizer", False),
+                ("That’s the tour!  The GGF Toolbar is always in your system "
+                 "tray — right-click its icon anytime for everything.", True),
             ]
 
             def _done():

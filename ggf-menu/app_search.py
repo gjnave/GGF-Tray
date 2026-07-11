@@ -636,10 +636,11 @@ class SearchDialog(QWidget):
                 "Click 'Login to GGF' first.")
             return
         
-        # Send the bearer token in a request header so URLs, browser history,
-        # access logs, and diagnostics do not contain reusable credentials.
+        # Send the token in the header (preferred) AND as a ?token= query param
+        # (fallback), so downloads work whether or not the header-aware
+        # download-api.php has been deployed. Token is URL-safe by construction.
         encoded_slug = urllib.parse.quote(tool_slug)
-        download_url = f"https://getgoingfast.pro/download-api.php?slug={encoded_slug}"
+        download_url = f"https://getgoingfast.pro/download-api.php?slug={encoded_slug}&token={user_token}"
         _log(f"download_selected: slug={tool_slug}")
         
         # Disable UI during download
@@ -778,8 +779,14 @@ class SearchDialog(QWidget):
         
         search_text = self.search_input.text().lower()
         type_filter = self.type_filter.currentData() or ''
-        
-        index = 0
+
+        def _is_fav(t):
+            v = t.get('fav')
+            if isinstance(v, str):
+                return v.strip().lower() in ('1', 'true', 'yes', 'y', 'fav')
+            return bool(v)
+
+        matches = []
         for tool in self.tools_data:
             name = tool.get('name', '').lower()
             description = tool.get('description', '').lower()
@@ -797,14 +804,21 @@ class SearchDialog(QWidget):
             if type_filter:
                 if type_filter not in types:
                     continue
-            
-            # Add to results
+
+            matches.append(tool)
+
+        # Favorites (the catalog's 'fav' apps) float to the top; the rest keep
+        # their existing catalog order (Python's sort is stable).
+        matches.sort(key=lambda t: 0 if _is_fav(t) else 1)
+
+        index = 0
+        for tool in matches:
             item = QListWidgetItem(tool.get('name', ''))
             item.setData(Qt.ItemDataRole.UserRole, tool)
             self.results_list.addItem(item)
             self.url_mapping[index] = tool.get('url', '')
             index += 1
-        
+
         if self.results_list.count() == 0:
             self.results_list.addItem("No results found")
             self.status_label.setText("No matching apps")
