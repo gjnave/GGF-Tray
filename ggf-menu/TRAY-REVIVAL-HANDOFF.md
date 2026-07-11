@@ -84,6 +84,20 @@ More fixes landed after the v0.12.0 build above (all committed + pushed to
   (`Downloads\GGF-tray-v012-2026-07-11\`) for header-based auth + live-tier rechecks
   (login/download already work without it via the query fallback); confirm
   tour + favorites + download on the new exe; code-sign the exe.
+- **Later 2026-07-11:** added a **"Show Welcome Tour"** tray Music-Visualizer menu
+  entry (`start_audio_visualizer(force_tour=True)` → appends `--tour`) so the intro
+  replays regardless of the one-time `tourSeen` flag; reset the owner's
+  `intro_shown` (`%LOCALAPPDATA%\GGF-Tray\tray_ui_state.json`) + `tourSeen`
+  (`visualizer_config.json`) so the corrected Toolbar tour re-fires on next tray
+  restart. **Current exe: built 2026-07-11 15:59 (~254,866,854 b); GitHub `main`
+  @ `82a88a5`.**
+- **⚠️ LESSON — don't hammer the live site when testing.** A ~114 MB test download
+  + rapid probe requests to getgoingfast.pro tripped the IONOS/Wordfence rate limit
+  and **blocked this machine's IP** — the whole site went unreachable (even the
+  homepage), which ALSO broke the owner's real tray downloads (WinError 10060,
+  connection timeout). Test sparingly (small/HEAD requests), and if the site goes
+  unreachable, suspect a rate-limit block and wait / unblock the IP in Wordfence
+  rather than assuming a code bug.
 
 ---
 
