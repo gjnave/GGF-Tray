@@ -15,6 +15,7 @@ from PyQt6.QtWebEngineWidgets import QWebEngineView
 import pyaudiowpatch as pyaudio
 import threading
 import queue
+from ggf_runtime import get_state_dir
 
 try:
     import psutil
@@ -29,16 +30,36 @@ def get_app_dir():
 
 
 SCRIPT_DIR = get_app_dir()
-CONFIG_PATH = os.path.join(SCRIPT_DIR, "visualizer_config.json")
-STATE_PATH = os.path.join(SCRIPT_DIR, "visualizer_state.json")
+STATE_DIR = get_state_dir()
+os.makedirs(STATE_DIR, exist_ok=True)
+CONFIG_PATH = os.path.join(STATE_DIR, "visualizer_config.json")
+STATE_PATH = os.path.join(STATE_DIR, "visualizer_state.json")
 CLICK_THROUGH_TIMEOUT_MS = 30000
 SHORTCUTS_CONFIG = os.path.join(SCRIPT_DIR, "shortcuts.txt")
 TRAY_IPC_HOST = "127.0.0.1"
 TRAY_IPC_PORT = 47653
 TRAY_IPC_BUFFER = 65536
-LOG_PATH = os.path.join(SCRIPT_DIR, "visualizer_debug.log")
+LOG_PATH = os.path.join(STATE_DIR, "visualizer_debug.log")
 VISUALIZER_MUTEX_NAME = "Global\\GGF-Audio-Visualizer-Unique-Mutex-4F21B991"
 visualizer_mutex_handle = None
+
+
+def migrate_legacy_visualizer_state():
+    """Move mutable files out of the executable directory when possible."""
+    for filename, destination in (
+        ("visualizer_config.json", CONFIG_PATH),
+        ("visualizer_state.json", STATE_PATH),
+    ):
+        legacy = os.path.join(SCRIPT_DIR, filename)
+        if legacy == destination or not os.path.isfile(legacy) or os.path.exists(destination):
+            continue
+        try:
+            os.replace(legacy, destination)
+        except OSError:
+            pass
+
+
+migrate_legacy_visualizer_state()
 
 
 def log_visualizer(message):
@@ -99,6 +120,11 @@ class SettingsWindow(QWidget):
         self.device_combo.setCurrentIndex(self.current_device_index)
         self.device_combo.currentIndexChanged.connect(self.on_device_changed)
         layout.addWidget(self.device_combo)
+
+        # One-click: snap capture to whatever the system default speakers are.
+        self.use_default_btn = QPushButton("Use Default Speakers")
+        self.use_default_btn.clicked.connect(lambda: self.audio_device_changed.emit(-1))
+        layout.addWidget(self.use_default_btn)
         
         # Add separator
         layout.addWidget(QLabel(""))
@@ -306,7 +332,7 @@ class VisualizerWindow(QMainWindow):
         self.write_state_file()
         
     def init_ui(self):
-        self.setWindowTitle("Audio Visualizer")
+        self.setWindowTitle("Music Visualizer")
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | 
                            Qt.WindowType.WindowStaysOnTopHint |
                            Qt.WindowType.Tool)
@@ -475,7 +501,11 @@ class VisualizerWindow(QMainWindow):
         return menu
 
     def send_tray_command(self, command, **payload):
-        message = {"command": command, **payload}
+        message = {
+            "command": command,
+            "ipc_token": os.environ.get('GGF_TRAY_IPC_TOKEN', ''),
+            **payload,
+        }
         with socket.create_connection((TRAY_IPC_HOST, TRAY_IPC_PORT), timeout=2.0) as sock:
             sock.sendall(json.dumps(message).encode("utf-8"))
             sock.shutdown(socket.SHUT_WR)
@@ -592,7 +622,7 @@ class VisualizerWindow(QMainWindow):
             action = video_menu.addAction(label)
             action.triggered.connect(lambda checked=False, tray_action=action_name: self.run_tray_command("menu_action", action=tray_action))
 
-        visualizer_menu = menu.addMenu("Audio Visualizer")
+        visualizer_menu = menu.addMenu("Music Visualizer")
         start_action = visualizer_menu.addAction("Start Visualizer")
         start_action.triggered.connect(lambda: self.run_tray_command("menu_action", action="audio_visualizer"))
         click_label = "Click Through Off" if self.click_through_mode else "Click Through"
@@ -1938,50 +1968,105 @@ animate();
             p.terminate()
         except Exception as e:
             log_visualizer(f"Error getting audio devices: {e}")
-            
+
         return devices
-    
+
+    def get_default_output_loopback_name(self):
+        """Return the loopback device NAME that matches the current default speakers
+        (the device the user actually hears), or None. pyaudiowpatch names its
+        loopback devices "<Speaker name> [Loopback]", so we match by the default
+        output device's name."""
+        try:
+            p = pyaudio.PyAudio()
+            try:
+                wasapi_info = p.get_host_api_info_by_type(pyaudio.paWASAPI)
+                default_out = p.get_device_info_by_index(wasapi_info["defaultOutputDevice"])
+            except Exception:
+                p.terminate()
+                return None
+
+            default_name = (default_out or {}).get("name", "")
+            match = None
+            if default_name:
+                for loopback in p.get_loopback_device_info_generator():
+                    if default_name in loopback.get("name", ""):
+                        match = loopback.get("name")
+                        break
+            p.terminate()
+            if match:
+                log_visualizer(f"Default speakers loopback resolved: {match}")
+            else:
+                log_visualizer(f"No loopback matched default speakers ('{default_name}')")
+            return match
+        except Exception as e:
+            log_visualizer(f"Default loopback detection failed: {e}")
+            return None
+
+    def _save_config_quiet(self):
+        try:
+            with open(CONFIG_PATH, 'w') as f:
+                json.dump(self.config, f, indent=2)
+        except Exception:
+            pass
+
     def try_audio_devices_async(self):
         search_thread = threading.Thread(target=self.try_audio_devices, daemon=True)
         search_thread.start()
     
     def try_audio_devices(self):
         devices = self.get_audio_devices()
-        
+
         if not devices:
             self.device_error.emit("No audio loopback devices found.")
             log_visualizer("No loopback devices found during startup")
             return
-        
+
+        # Auto mode = follow the system default speakers. On by default and whenever
+        # the user hasn't pinned a specific device. A manual pick in Settings turns it
+        # off (see on_device_changed); the "Use Default Speakers" button turns it on.
+        auto_mode = bool(self.config.get('autoDefaultDevice')) or not self.config.get('selectedDeviceName')
+
+        # Preferred: the loopback of the CURRENT default speakers (what the user hears).
+        if auto_mode:
+            default_name = self.get_default_output_loopback_name()
+            if default_name:
+                for device in devices:
+                    if device['name'] == default_name:
+                        self.selected_device_index = device['index']
+                        if self.quick_test_audio_device():
+                            self.device_working = True
+                            self.config['autoDefaultDevice'] = True
+                            self.config['selectedDeviceName'] = device['name']
+                            self.config['selectedDeviceIndex'] = device['index']
+                            self._save_config_quiet()
+                            log_visualizer(f"Using default-speakers loopback: {device['name']} ({device['index']})")
+                            self.device_success.emit(f"Audio device: {device['name']}")
+                            self.start_audio_capture()
+                            return
+                        log_visualizer(f"Default-speakers loopback found but could not open: {default_name}")
+
+        # A specific device the user pinned (only honored when not in auto mode).
         saved_device_name = self.config.get('selectedDeviceName')
-        
-        if saved_device_name:
+        if saved_device_name and not auto_mode:
             for device in devices:
                 if device['name'] == saved_device_name:
                     self.selected_device_index = device['index']
-                    
                     if self.quick_test_audio_device():
                         self.device_working = True
                         log_visualizer(f"Using saved audio device: {device['name']} ({device['index']})")
                         self.device_success.emit(f"Audio device: {device['name']}")
                         self.start_audio_capture()
                         return
-        
+
+        # Last resort: the first loopback that opens.
         for device in devices:
             self.selected_device_index = device['index']
-            
             if self.quick_test_audio_device():
                 self.device_working = True
                 self.config['selectedDeviceName'] = device['name']
                 self.config['selectedDeviceIndex'] = device['index']
+                self._save_config_quiet()
                 log_visualizer(f"Using fallback audio device: {device['name']} ({device['index']})")
-                
-                try:
-                    with open(CONFIG_PATH, 'w') as f:
-                        json.dump(self.config, f, indent=2)
-                except:
-                    pass
-                
                 self.device_success.emit(f"Audio device: {device['name']}")
                 self.start_audio_capture()
                 return
@@ -2035,25 +2120,46 @@ animate();
         
     def on_device_changed(self, device_index):
         devices = self.get_audio_devices()
+
+        # -1 = the "Use Default Speakers" button: follow the system default output.
+        if device_index == -1:
+            self.config['autoDefaultDevice'] = True
+            default_name = self.get_default_output_loopback_name()
+            target = None
+            if default_name:
+                for device in devices:
+                    if device['name'] == default_name:
+                        target = device
+                        break
+            if target is None and devices:
+                target = devices[0]
+            if not target:
+                self.device_error.emit("No audio loopback devices found.")
+                return
+            self.selected_device_index = target['index']
+            self.config['selectedDeviceName'] = target['name']
+            self.config['selectedDeviceIndex'] = target['index']
+            self._save_config_quiet()
+            self.start_audio_capture()
+            self.device_success.emit(f"Audio device: {target['name']}")
+            return
+
         device_name = ""
         for device in devices:
             if device['index'] == device_index:
                 device_name = device['name']
                 break
-        
+
         if not device_name:
             return
-        
+
+        # A manual pick pins the device and leaves auto mode.
+        self.config['autoDefaultDevice'] = False
         self.selected_device_index = device_index
         self.config['selectedDeviceName'] = device_name
         self.config['selectedDeviceIndex'] = device_index
-        
-        try:
-            with open(CONFIG_PATH, 'w') as f:
-                json.dump(self.config, f, indent=2)
-        except:
-            pass
-        
+        self._save_config_quiet()
+
         self.start_audio_capture()
         self.device_success.emit(f"Audio device: {device_name}")
 
@@ -2393,7 +2499,7 @@ def load_config():
 
 def main():
     print("\n" + "="*60)
-    print("STARTING AUDIO VISUALIZER (7 Modes)")
+    print("STARTING MUSIC VISUALIZER (7 Modes)")
     print("="*60)
     log_visualizer("Launching visualizer")
 

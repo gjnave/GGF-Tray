@@ -14,11 +14,18 @@ import shutil
 import threading
 import time
 import subprocess
+import re
 from PyQt6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout,
                              QLineEdit, QComboBox, QListWidget, QLabel, 
                              QPushButton, QListWidgetItem, QProgressBar, QMessageBox)
 from PyQt6.QtCore import Qt, QTimer, QUrl, QThread, pyqtSignal
-from ggf_runtime import configure_ssl_environment, urlopen_with_ssl
+from ggf_runtime import (
+    configure_ssl_environment,
+    get_state_dir,
+    launch_console_command,
+    redact_secrets,
+    urlopen_with_ssl,
+)
 
 # --- Logging ---
 import datetime
@@ -38,11 +45,16 @@ def get_subprocess_env():
 
 
 APP_DIR = get_app_dir()
+STATE_DIR = get_state_dir()
 configure_ssl_environment()
-_LOG_FILE = os.path.join(APP_DIR, 'app_search_log.txt')
+_LOG_FILE = os.path.join(STATE_DIR, 'app_search_log.txt')
+_CATALOG_CACHE = os.path.join(STATE_DIR, 'tools-list-cache.json')
+_ALLOWED_DOWNLOAD_EXTENSIONS = {'.zip', '.rar', '.7z', '.exe', '.bat', '.json', '.pptx', '.kcppt', '.safetensors'}
+
+
 def _log(msg):
     ts = datetime.datetime.now().strftime('%H:%M:%S.%f')[:-3]
-    line = f"[{ts}] {msg}"
+    line = f"[{ts}] {redact_secrets(msg)}"
     print(line)
     try:
         with open(_LOG_FILE, 'a', encoding='utf-8') as _f:
@@ -77,14 +89,16 @@ class DownloadWorker(QThread):
     progress = pyqtSignal(int, str)  # (percent, status_message)
     finished = pyqtSignal(bool, str, str, str)  # (success, message, file_path, file_type)
     
-    def __init__(self, download_url, tool_slug):
+    def __init__(self, download_url, tool_slug, app_token):
         super().__init__()
         self.download_url = download_url
         self.tool_slug = tool_slug
+        self.app_token = app_token
     
     def run(self):
         _log(f"=== DownloadWorker.run START slug={self.tool_slug} ===")
         _log(f"download_url = {self.download_url}")
+        temp_dir = None
         try:
             temp_dir = tempfile.mkdtemp()
             _log(f"temp_dir = {temp_dir}")
@@ -92,11 +106,14 @@ class DownloadWorker(QThread):
 
             # Single request - read header AND body from same connection
             _log("Opening URL connection...")
-            req = urllib.request.Request(self.download_url, headers={'User-Agent': 'GGF-AppSearch/1.0'})
-            response = urlopen_with_ssl(req)
+            req = urllib.request.Request(self.download_url, headers={
+                'User-Agent': 'GGF-AppSearch/0.12',
+                'X-GGF-App-Token': self.app_token,
+                'Cache-Control': 'no-store',
+            })
+            response = urlopen_with_ssl(req, timeout=60)
             _log(f"Response status: {response.status}")
             _log(f"Response URL (after redirects): {response.url}")
-            _log(f"Response headers: {dict(response.headers)}")
 
             content_disposition = response.headers.get('Content-Disposition', '')
             content_type = response.headers.get('Content-Type', '')
@@ -105,17 +122,22 @@ class DownloadWorker(QThread):
             _log(f"Content-Type: {content_type}")
             _log(f"Content-Length: {content_length}")
 
-            if 'filename=' in content_disposition:
-                actual_filename = content_disposition.split('filename=')[1].strip('"; ')
-                _log(f"Filename from header: {actual_filename}")
-            else:
-                actual_filename = f"{self.tool_slug}.zip"
-                _log(f"No filename in header, using fallback: {actual_filename} (server should set Content-Disposition)")
+            actual_filename = response.headers.get_filename() or f"{self.tool_slug}.zip"
+            actual_filename = os.path.basename(actual_filename.replace('\\', '/')).strip().strip('. ')
+            actual_filename = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', actual_filename)
+            if not actual_filename:
+                raise RuntimeError("The server did not provide a safe filename.")
+            file_ext = os.path.splitext(actual_filename)[1].lower()
+            if file_ext not in _ALLOWED_DOWNLOAD_EXTENSIONS:
+                raise RuntimeError(f"The server returned an unsupported file type: {file_ext or '(none)'}")
+            _log(f"Filename from server: {actual_filename}")
 
             file_path = os.path.join(temp_dir, actual_filename)
             _log(f"Writing to: {file_path}")
 
-            total_size = int(response.headers.get('Content-Length', 0))
+            total_size = int(response.headers.get('Content-Length', 0) or 0)
+            if total_size > 40 * 1024 * 1024 * 1024:
+                raise RuntimeError("The download is larger than the 40 GiB safety limit.")
             downloaded = 0
             chunk_size = 8192
             with open(file_path, 'wb') as f:
@@ -125,6 +147,8 @@ class DownloadWorker(QThread):
                         break
                     f.write(chunk)
                     downloaded += len(chunk)
+                    if downloaded > 40 * 1024 * 1024 * 1024:
+                        raise RuntimeError("The download exceeded the 40 GiB safety limit.")
                     if total_size > 0:
                         pct = min(100, int(downloaded * 100 / total_size))
                         self.progress.emit(pct, f"Downloading... {pct}%")
@@ -139,11 +163,14 @@ class DownloadWorker(QThread):
             # Peek at first bytes to detect if server returned error HTML instead of file
             with open(file_path, 'rb') as f:
                 head = f.read(200)
-            _log(f"First 200 bytes (repr): {repr(head)}")
+            _log(f"File signature: {head[:16].hex()}")
             if head.strip().lower().startswith(b'<!doctype') or head.strip().lower().startswith(b'<html'):
-                _log("WARNING: response looks like HTML error page, not a real file!")
+                raise RuntimeError("The server returned a web page instead of an installer file.")
+            if downloaded == 0:
+                raise RuntimeError("The server returned an empty file.")
 
-            file_ext = os.path.splitext(actual_filename)[1].lower()
+            if file_ext == '.zip' and not zipfile.is_zipfile(file_path):
+                raise RuntimeError("The downloaded file is named ZIP but is not a valid ZIP archive.")
             _log(f"file_ext = {file_ext}")
             self.progress.emit(100, "Download complete!")
             _log("Emitting finished(True)")
@@ -156,12 +183,35 @@ class DownloadWorker(QThread):
             _log(f"HTTPError: code={e.code} reason={e.reason}")
             _log(f"Error headers: {dict(e.headers) if hasattr(e,'headers') else 'n/a'}")
             _log(f"Error body (first 500): {body}")
+            if temp_dir:
+                shutil.rmtree(temp_dir, ignore_errors=True)
             self.finished.emit(False, f"Download failed: HTTP {e.code} {e.reason}\n\nServer said:\n{body[:300]}", "", "")
         except Exception as e:
             import traceback
             _log(f"Exception: {type(e).__name__}: {e}")
             _log(traceback.format_exc())
+            if temp_dir:
+                shutil.rmtree(temp_dir, ignore_errors=True)
             self.finished.emit(False, f"Download failed:\n{str(e)}", "", "")
+
+
+def membership_allows_download(user_tier, membership_code):
+    """Mirror the server's explicit catalog-code access rules."""
+    required_levels = {'free': 0, 'pd': 1, 'fh': 2}
+    user_levels = {'free': 0, 'prairie-dog': 1, 'farm-hand': 2, 'rancher': 2, 'gunslinger': 2}
+    if membership_code == 'fs':  # For Sale: requires the website purchase flow.
+        return False
+    return user_levels.get(user_tier, 0) >= required_levels.get(membership_code, 99)
+
+
+def unique_destination(directory, filename):
+    stem, extension = os.path.splitext(filename)
+    candidate = os.path.join(directory, filename)
+    counter = 2
+    while os.path.exists(candidate):
+        candidate = os.path.join(directory, f"{stem}-{counter}{extension}")
+        counter += 1
+    return candidate
 
 
 class LoginPoller(QThread):
@@ -226,8 +276,8 @@ class SearchDialog(QWidget):
         if auth_manager and auth_manager.is_authenticated():
             tier_name = auth_manager.format_tier_name()
             user_name = auth_manager.get_name()
-            auth_header = QLabel(f"🎯 {tier_name} - {user_name}")
-            auth_header.setStyleSheet("""
+            self.auth_header = QLabel(f"Access: {tier_name} - {user_name}")
+            self.auth_header.setStyleSheet("""
                 QLabel {
                     background-color: #4a90e2;
                     color: white;
@@ -237,8 +287,8 @@ class SearchDialog(QWidget):
                 }
             """)
         else:
-            auth_header = QLabel("🔓 Not Logged In")
-            auth_header.setStyleSheet("""
+            self.auth_header = QLabel("Not logged in")
+            self.auth_header.setStyleSheet("""
                 QLabel {
                     background-color: #666;
                     color: white;
@@ -249,12 +299,13 @@ class SearchDialog(QWidget):
             """)
         
         auth_layout = QHBoxLayout()
-        auth_layout.addWidget(auth_header, 1)
+        auth_layout.addWidget(self.auth_header, 1)
+        self.login_btn = None
         
         # Login button if not authenticated
         if not (auth_manager and auth_manager.is_authenticated()):
-            login_btn = QPushButton("Login with Patreon")
-            login_btn.setStyleSheet("""
+            self.login_btn = QPushButton("Login to GGF")
+            self.login_btn.setStyleSheet("""
                 QPushButton {
                     background-color: #FF424D;
                     color: white;
@@ -267,8 +318,8 @@ class SearchDialog(QWidget):
                     background-color: #E0383F;
                 }
             """)
-            login_btn.clicked.connect(self.open_login)
-            auth_layout.addWidget(login_btn)
+            self.login_btn.clicked.connect(self.open_login)
+            auth_layout.addWidget(self.login_btn)
         
         layout.addLayout(auth_layout)
         
@@ -295,8 +346,7 @@ class SearchDialog(QWidget):
         
         # Type filter
         self.type_filter = QComboBox()
-        self.type_filter.addItems(["Type (all)", "Faceswap", "Image", "Video", 
-                                  "Audio", "LLM", "TTS", "LipSync", "Utility", "ComfyUI"])
+        self.type_filter.addItem("Type (all)", "")
         self.type_filter.setStyleSheet("""
             QComboBox {
                 background-color: #3b3b3b;
@@ -439,7 +489,7 @@ class SearchDialog(QWidget):
         layout.addLayout(btn_layout)
     
     def open_login(self):
-        """Open Patreon login in browser and wait for validation"""
+        """Open GGF login in browser and wait for validation"""
         if not auth_manager:
             return
         
@@ -447,13 +497,19 @@ class SearchDialog(QWidget):
         token = auth_manager.login()
         
         def on_success(result):
-            # Show message to restart the tray app
+            self.auth_header.setText(
+                f"Access: {auth_manager.format_tier_name(result['tier'])} - {result['name']}"
+            )
+            self.auth_header.setStyleSheet(
+                "QLabel { background-color:#4a90e2; color:white; font-weight:bold; padding:8px; border-radius:4px; }"
+            )
+            if self.login_btn:
+                self.login_btn.hide()
+            self.on_selection_changed()
             QMessageBox.information(self, "Login Successful!", 
                 f"Welcome {result['name']}!\n\n" +
                 f"Tier: {auth_manager.format_tier_name(result['tier'])}\n\n" +
-                "Please restart the GGF Tray app to see your new tier in the tray menu.")
-            # Close this window
-            self.close()
+                "Your downloads are ready. The tray menu will refresh on its next restart.")
         
         def on_failed():
             QMessageBox.warning(self, "Login Timeout", 
@@ -473,11 +529,42 @@ class SearchDialog(QWidget):
         try:
             with urlopen_with_ssl('https://getgoingfast.pro/tools/tools-list.json', timeout=10) as response:
                 data = json.loads(response.read().decode())
-                self.tools_data = data.get('tools', [])
-                self.filter_results()
-                self.status_label.setText(f"Loaded {len(self.tools_data)} tools")
+            tools = data.get('tools', [])
+            if not isinstance(tools, list) or not all(isinstance(tool, dict) for tool in tools):
+                raise ValueError("The catalog response is not valid.")
+            self.tools_data = tools
+            try:
+                with open(_CATALOG_CACHE + '.tmp', 'w', encoding='utf-8') as handle:
+                    json.dump(data, handle)
+                os.replace(_CATALOG_CACHE + '.tmp', _CATALOG_CACHE)
+            except OSError:
+                pass
+            self.rebuild_type_filter()
+            self.filter_results()
+            self.status_label.setText(f"Loaded {len(self.tools_data)} tools")
         except Exception as e:
-            self.status_label.setText(f"Error: {str(e)}")
+            try:
+                with open(_CATALOG_CACHE, 'r', encoding='utf-8') as handle:
+                    cached = json.load(handle)
+                self.tools_data = cached.get('tools', [])
+                self.rebuild_type_filter()
+                self.filter_results()
+                self.status_label.setText(f"Offline: showing {len(self.tools_data)} cached tools")
+            except Exception:
+                self.status_label.setText(f"Could not load the app catalog: {redact_secrets(e)}")
+
+    def rebuild_type_filter(self):
+        current_code = self.type_filter.currentData() or ''
+        labels = {'comfy': 'ComfyUI', 'llm': 'LLM', 'tts': 'TTS', 'lipsync': 'Lip Sync'}
+        codes = sorted({str(tool.get('type1', '')).strip().lower() for tool in self.tools_data if tool.get('type1')})
+        self.type_filter.blockSignals(True)
+        self.type_filter.clear()
+        self.type_filter.addItem("Type (all)", "")
+        for code in codes:
+            self.type_filter.addItem(labels.get(code, code.replace('-', ' ').title()), code)
+        index = self.type_filter.findData(current_code)
+        self.type_filter.setCurrentIndex(index if index >= 0 else 0)
+        self.type_filter.blockSignals(False)
     
     def on_selection_changed(self):
         """Handle selection change - show/hide download button"""
@@ -488,9 +575,8 @@ class SearchDialog(QWidget):
             self.current_selection = None
             return
         
-        # Find the full tool data
         tool_name = item.text()
-        tool_data = next((t for t in self.tools_data if t.get('name') == tool_name), None)
+        tool_data = item.data(Qt.ItemDataRole.UserRole)
         
         if not tool_data:
             self.download_btn.hide()
@@ -501,25 +587,20 @@ class SearchDialog(QWidget):
         self.current_selection = tool_data
         
         # Check tier access
-        # JSON membership values: free, pd (prairie dog only), fh (farm hand/premium only)
+        # Catalog access is cumulative: free, Prairie Dog, then Farm Hand and above.
         # User tiers: free, prairie-dog, farm-hand, rancher, gunslinger
         required_membership = tool_data.get('membership', 'free')
         user_tier = auth_manager.get_tier() if auth_manager else 'free'
         
-        # Determine access based on user tier and required membership
-        has_access = False
-        if user_tier in ['farm-hand', 'rancher', 'gunslinger']:
-            # Farm Hand/Rancher/Gunslinger get everything (all are Farm Hand tier or above)
-            has_access = True
-        elif user_tier == 'prairie-dog':
-            # Prairie Dog gets free and pd
-            has_access = required_membership in ['free', 'pd']
-        else:  # free
-            # Free only gets free
-            has_access = required_membership == 'free'
+        has_access = membership_allows_download(user_tier, required_membership)
         
         # Show selection info
-        self.selection_label.setText(f"Selected: {tool_name}")
+        if required_membership == 'fs':
+            self.selection_label.setText(f"Selected: {tool_name} - purchase from the tool page")
+        elif not has_access:
+            self.selection_label.setText(f"Selected: {tool_name} - higher membership tier required")
+        else:
+            self.selection_label.setText(f"Selected: {tool_name}")
         
         # Show download button only if:
         # 1. Tool has a slug (needed for download API)
@@ -552,14 +633,14 @@ class SearchDialog(QWidget):
         if not user_token:
             QMessageBox.warning(self, "Not Authenticated", 
                 "You need to be logged in to download.\n\n" +
-                "Click 'Login with Patreon' first.")
+                "Click 'Login to GGF' first.")
             return
         
-        # Build download URL using the API
+        # Send the bearer token in a request header so URLs, browser history,
+        # access logs, and diagnostics do not contain reusable credentials.
         encoded_slug = urllib.parse.quote(tool_slug)
-        encoded_token = urllib.parse.quote(user_token)
-        download_url = f"https://getgoingfast.pro/download-api.php?slug={encoded_slug}&token={encoded_token}"
-        _log(f"download_selected: slug={tool_slug} url={download_url}")
+        download_url = f"https://getgoingfast.pro/download-api.php?slug={encoded_slug}"
+        _log(f"download_selected: slug={tool_slug}")
         
         # Disable UI during download
         self.download_btn.setEnabled(False)
@@ -567,7 +648,7 @@ class SearchDialog(QWidget):
         self.progress_bar.setValue(0)
         
         # Start download in thread
-        self.download_worker = DownloadWorker(download_url, tool_slug)
+        self.download_worker = DownloadWorker(download_url, tool_slug, user_token)
         self.download_worker.progress.connect(self.on_download_progress)
         self.download_worker.finished.connect(self.on_download_finished)
         self.download_worker.start()
@@ -588,21 +669,25 @@ class SearchDialog(QWidget):
             return
         
         # Handle based on file type
-        if file_ext in ('.zip', '.rar'):
+        if file_ext in ('.zip', '.rar', '.7z'):
             # ZIP file - save to Downloads\ggf first
             downloads_dir = os.path.join(os.path.expanduser('~'), 'Downloads', 'ggf')
             os.makedirs(downloads_dir, exist_ok=True)
             
             zip_filename = os.path.basename(file_path)
-            permanent_path = os.path.join(downloads_dir, zip_filename)
+            permanent_path = unique_destination(downloads_dir, zip_filename)
             shutil.move(file_path, permanent_path)
+            try:
+                os.rmdir(os.path.dirname(file_path))
+            except OSError:
+                pass
             installer_opened = False
             try:
                 script_dir = APP_DIR
                 creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP") else 0
                 if getattr(sys, 'frozen', False):
                     subprocess.Popen(
-                        [sys.executable, "--install-zip", permanent_path, "--auto-install"],
+                        [sys.executable, "--install-zip", permanent_path],
                         cwd=script_dir,
                         creationflags=creationflags,
                         env=get_subprocess_env()
@@ -610,7 +695,7 @@ class SearchDialog(QWidget):
                 else:
                     tray_script = os.path.join(script_dir, "ggf-tray.py")
                     subprocess.Popen(
-                        [sys.executable, tray_script, "--install-zip", permanent_path, "--auto-install"],
+                        [sys.executable, tray_script, "--install-zip", permanent_path],
                         cwd=script_dir,
                         creationflags=creationflags
                     )
@@ -648,6 +733,10 @@ class SearchDialog(QWidget):
             
             if save_path:
                 shutil.move(file_path, save_path)
+                try:
+                    os.rmdir(os.path.dirname(file_path))
+                except OSError:
+                    pass
                 _log(f"File saved to: {save_path}")
                 
                 if file_ext in ['.exe', '.bat']:
@@ -659,15 +748,11 @@ class SearchDialog(QWidget):
                     if reply == QMessageBox.StandardButton.Yes:
                         try:
                             file_dir = os.path.dirname(save_path)
-                            file_name = os.path.basename(save_path)
                             _log(f"Launching: {save_path}")
                             if file_ext == '.bat':
-                                subprocess.Popen(
-                                    f'start "GGF" cmd /k "cd /d "{file_dir}" && "{file_name}""',
-                                    shell=True
-                                )
+                                launch_console_command([save_path], cwd=file_dir, keep_open=True)
                             else:
-                                subprocess.Popen(save_path, shell=True)
+                                os.startfile(save_path)
                             QMessageBox.information(self, "Launched", "Script/application started!")
                         except Exception as e:
                             _log(f"Launch error: {e}")
@@ -681,6 +766,7 @@ class SearchDialog(QWidget):
                     os.remove(file_path)
                 except:
                     pass
+                shutil.rmtree(os.path.dirname(file_path), ignore_errors=True)
                 self.status_label.setText("Download cancelled")
     
     def filter_results(self):
@@ -691,28 +777,30 @@ class SearchDialog(QWidget):
         self.download_btn.hide()
         
         search_text = self.search_input.text().lower()
-        type_filter = self.type_filter.currentText().lower()
+        type_filter = self.type_filter.currentData() or ''
         
         index = 0
         for tool in self.tools_data:
             name = tool.get('name', '').lower()
-            type1 = tool.get('type1', '').lower()
-            
+            description = tool.get('description', '').lower()
+            # A tool can be tagged in up to three category slots; match any of them.
+            types = {
+                (tool.get('type1') or '').lower(),
+                (tool.get('type2') or '').lower(),
+                (tool.get('type3') or '').lower(),
+            }
+
             # Check search text
-            if search_text and search_text not in name:
+            if search_text and search_text not in name and search_text not in description:
                 continue
-            
-            # Check type filter
-            if type_filter != "type (all)":
-                if type_filter == "comfyui":
-                    if type1 != "comfy":
-                        continue
-                elif type1 != type_filter:
+
+            if type_filter:
+                if type_filter not in types:
                     continue
             
             # Add to results
             item = QListWidgetItem(tool.get('name', ''))
-            item.setData(Qt.ItemDataRole.UserRole, tool.get('url', ''))
+            item.setData(Qt.ItemDataRole.UserRole, tool)
             self.results_list.addItem(item)
             self.url_mapping[index] = tool.get('url', '')
             index += 1
@@ -726,7 +814,8 @@ class SearchDialog(QWidget):
     def open_app_url(self, item):
         """Open selected app in browser"""
         if item:
-            url = item.data(Qt.ItemDataRole.UserRole)
+            tool_data = item.data(Qt.ItemDataRole.UserRole)
+            url = tool_data.get('url', '') if isinstance(tool_data, dict) else ''
             if url:
                 # Check if URL already contains a full domain (starts with http)
                 if url.startswith('http://') or url.startswith('https://'):
@@ -757,7 +846,7 @@ class SearchDialog(QWidget):
         slug = tool_data.get('slug', '')
         page_url = tool_data.get('url', '')
         if slug:
-            dl_url = f"https://getgoingfast.pro/download-api.php?slug={urllib.parse.quote(slug)}&token=<token>"
+            dl_url = f"https://getgoingfast.pro/download-api.php?slug={urllib.parse.quote(slug)} (authenticated header)"
         else:
             dl_url = "(no slug)"
 

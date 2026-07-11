@@ -16,12 +16,26 @@ import configparser
 import ctypes
 import socket
 import time
+import secrets
 from ctypes import wintypes
 from ggf_runtime import (
     configure_ssl_environment,
     get_ffmpeg_executable,
+    get_state_dir,
     launch_console_command,
     urlopen_with_ssl,
+)
+from ggf_installer import (
+    InstallSafetyError,
+    discover_install_files,
+    extract_archive,
+    load_registry,
+    remove_registry_entry,
+    safe_install_path,
+    sanitize_folder_name,
+    upsert_registry,
+    validate_delete_target,
+    write_install_marker,
 )
 
 # ============================================================================
@@ -98,21 +112,68 @@ def get_subprocess_env():
 
 RESOURCE_DIR = get_resource_dir()
 SCRIPT_DIR = get_app_dir()
-ICON_PATH = os.path.join(RESOURCE_DIR, "logo.ico")
+STATE_DIR = get_state_dir()
+ICON_PATH = os.path.join(RESOURCE_DIR, "logo-v2.ico")
 SHORTCUTS_CONFIG = os.path.join(SCRIPT_DIR, "shortcuts.txt")
 CONFIG_PATH = os.path.join(SCRIPT_DIR, "config.txt")
-TRAY_UI_STATE_PATH = os.path.join(SCRIPT_DIR, "tray_ui_state.json")
+TRAY_UI_STATE_PATH = os.path.join(STATE_DIR, "tray_ui_state.json")
+INSTALLED_APPS_CONFIG = os.path.join(SCRIPT_DIR, "installed_apps.txt")
+DEFAULT_CONFIG_TEXT = """[General]
+output_suffix = _converted
+skip_comfyui_prompt = false
+hide_to_tray = false
+first_run = false
+
+[Image]
+resize_percent = 50
+resize_max_width = 1920
+convert_formats = jpg,png,webp
+
+[Video]
+video_preset = medium
+video_crf = 23
+video_codec = libx264
+audio_codec = aac
+audio_bitrate = 192k
+shrink_bitrate = 2000k
+shrink_resolution = 1080p
+gif_fps = 10
+gif_scale = 480
+convert_formats = mp4,avi,webm,mkv,mov,gif
+audio_extract_formats = mp3,wav,ogg,aac,flac,m4a
+
+[Transcribe]
+output_formats = txt,srt
+whisper_model = base
+
+[Download]
+yt_dlp_format = bestvideo+bestaudio
+output_template = %(title)s.%(ext)s
+default_download_dir = Downloads
+
+[Paths]
+comfyui_path = D:/staging/Comfy/ComfyUI
+"""
 
 # Windows mutex for single instance check
 MUTEX_NAME = "Global\\GGF-Tray-Unique-Mutex-87A3F9B2"
 mutex_handle = None
 APP_ID = "audio-v"  # Audio_visualizer.py 
 WHISPER_ENABLED = False
-UTILITY_ARGS = {"--install-zip", "--show-visualizer-menu", "--show-companion-menu", "--run-app-search", "--run-visualizer"}
+UTILITY_ARGS = {"--install-zip", "--show-visualizer-menu", "--show-companion-menu", "--run-app-search", "--run-visualizer", "--self-test"}
 TRAY_IPC_HOST = "127.0.0.1"
 TRAY_IPC_PORT = 47653
 TRAY_IPC_BUFFER = 65536
 configure_ssl_environment()
+
+
+def ensure_config_file():
+    try:
+        if not os.path.exists(CONFIG_PATH) or os.path.getsize(CONFIG_PATH) == 0:
+            with open(CONFIG_PATH, "w", encoding="utf-8") as file_handle:
+                file_handle.write(DEFAULT_CONFIG_TEXT)
+    except Exception as exc:
+        print(f"Error ensuring config file: {exc}")
 
 def check_already_running():
     """Check if another instance is already running using Windows mutex"""
@@ -149,6 +210,7 @@ if __name__ == "__main__" and not any(arg in UTILITY_ARGS for arg in sys.argv[1:
 
 def get_config():
     """Read config"""
+    ensure_config_file()
     config = configparser.ConfigParser()
     if os.path.exists(CONFIG_PATH):
         config.read(CONFIG_PATH)
@@ -156,6 +218,7 @@ def get_config():
 
 class GGFTray:
     def __init__(self):
+        ensure_config_file()
         self.utility_mode = any(arg in UTILITY_ARGS for arg in sys.argv[1:])
         self.remote_menu_mode = "--show-companion-menu" in sys.argv or "--show-visualizer-menu" in sys.argv
         self.shortcuts = self.load_shortcuts()
@@ -165,13 +228,17 @@ class GGFTray:
         self.command_server_socket = None
         self.command_server_thread = None
         self.command_server_stop = threading.Event()
+        inherited_ipc_token = os.environ.get('GGF_TRAY_IPC_TOKEN', '')
+        self.ipc_token = inherited_ipc_token if self.utility_mode else secrets.token_urlsafe(32)
+        if not self.utility_mode:
+            os.environ['GGF_TRAY_IPC_TOKEN'] = self.ipc_token
         self.helper_processes = []
         self.ui_state = self.load_ui_state()
         self.tips_thread = None
         
         # Initialize auth manager
         if AUTH_AVAILABLE:
-            auth_cache_path = os.path.join(SCRIPT_DIR, "auth_cache.json")
+            auth_cache_path = os.path.join(STATE_DIR, "auth_cache.dat")
             self.auth = AuthManager(cache_file=auth_cache_path)
             
             # Trigger initial auth check (will read from cache or browser)
@@ -179,7 +246,7 @@ class GGFTray:
             if auth_status:
                 print(f"Logged in as: {auth_status['name']} ({self.auth.format_tier_name()})")
             else:
-                print("Not logged in - use 'Login with Patreon' in app search")
+                print("Not logged in - use 'Login to GGF' in app search")
         else:
             self.auth = None
             print("Auth system not available")
@@ -292,7 +359,7 @@ class GGFTray:
 
             body = (
                 "- Right-click the tray icon for A.I. Apps, conversions, utility tools, and restart/quit.\n\n"
-                "- Double-click the tray icon to open the Audio Visualizer instantly.\n\n"
+                "- Double-click the tray icon to open the Music Visualizer instantly.\n\n"
                 "- Use the visualizer Menu button for quick access when the tray icon is hidden.\n\n"
                 "- Clipboard-based conversions work after selecting a file in Explorer and pressing Ctrl+C."
             )
@@ -393,7 +460,11 @@ class GGFTray:
 
     def send_command_to_running_tray(self, command, **payload):
         """Send a helper-menu command to the live tray process."""
-        message = {"command": command, **payload}
+        message = {
+            "command": command,
+            "ipc_token": os.environ.get('GGF_TRAY_IPC_TOKEN', ''),
+            **payload,
+        }
         try:
             with socket.create_connection((TRAY_IPC_HOST, TRAY_IPC_PORT), timeout=2.0) as sock:
                 sock.sendall(json.dumps(message).encode("utf-8"))
@@ -418,6 +489,10 @@ class GGFTray:
 
     def dispatch_remote_command(self, payload):
         """Execute a whitelisted command from a helper process."""
+        if not isinstance(payload, dict) or not secrets.compare_digest(
+            str(payload.get('ipc_token', '')), self.ipc_token
+        ):
+            return {"ok": False, "error": "unauthorized command"}
         command = payload.get("command")
 
         if command == "ping":
@@ -511,27 +586,36 @@ class GGFTray:
             visualizer_path = None
 
         if not getattr(sys, 'frozen', False) and not os.path.exists(visualizer_path):
-            self.show_message("Error", "Audio visualizer not found!", "error")
+            self.show_message("Error", "Music Visualizer not found!", "error")
             return
 
         try:
             if any(True for _ in self.iter_audio_visualizer_processes()):
                 return
 
-            creationflags = 0
+            # Launch fully hidden -- no console flash. CREATE_NO_WINDOW stops the
+            # child (python.exe in dev, the windowed exe when frozen) from creating
+            # or attaching a console; we avoid shell=True / `start`, which spins up a
+            # visible cmd.exe. The visualizer's own Qt window still appears normally.
+            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
             if hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP"):
                 creationflags |= subprocess.CREATE_NEW_PROCESS_GROUP
-            if hasattr(subprocess, "DETACHED_PROCESS"):
-                creationflags |= subprocess.DETACHED_PROCESS
 
             if getattr(sys, 'frozen', False):
-                self.track_process(subprocess.Popen(
-                    f'start "" /D "{SCRIPT_DIR}" "{sys.executable}" --run-visualizer --app-id={APP_ID}',
-                    shell=True,
-                    env=get_subprocess_env()
-                ))
+                args = [sys.executable, "--run-visualizer", f"--app-id={APP_ID}"]
             else:
-                self.track_process(subprocess.Popen([sys.executable, visualizer_path, f"--app-id={APP_ID}"], cwd=SCRIPT_DIR, close_fds=True, creationflags=creationflags))
+                args = [sys.executable, visualizer_path, f"--app-id={APP_ID}"]
+
+            self.track_process(subprocess.Popen(
+                args,
+                cwd=SCRIPT_DIR,
+                close_fds=True,
+                creationflags=creationflags,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                env=get_subprocess_env(),
+            ))
         except Exception as e:
             self.show_message("Error", f"Failed to start visualizer:\n{str(e)}", "error")
 
@@ -642,7 +726,33 @@ class GGFTray:
             
         print(f"Total shortcuts loaded: {len(shortcuts)}")
         return shortcuts
-    
+
+    def upsert_shortcut(self, name, filepath):
+        """Add or replace one shortcut without creating duplicate records."""
+        shortcuts = self.load_shortcuts()
+        for existing in list(shortcuts):
+            if existing.casefold() == name.casefold():
+                del shortcuts[existing]
+        shortcuts[name] = os.path.abspath(filepath)
+        temp_path = SHORTCUTS_CONFIG + '.tmp'
+        with open(temp_path, 'w', encoding='utf-8', newline='\n') as handle:
+            handle.write('# GGF Quick Launch shortcuts\n# Format: name=path\n')
+            for shortcut_name in sorted(shortcuts, key=str.casefold):
+                handle.write(f"{shortcut_name}={shortcuts[shortcut_name]}\n")
+        os.replace(temp_path, SHORTCUTS_CONFIG)
+
+    def remove_shortcut(self, name):
+        shortcuts = self.load_shortcuts()
+        filtered = {key: value for key, value in shortcuts.items() if key.casefold() != name.casefold()}
+        if len(filtered) == len(shortcuts):
+            return
+        temp_path = SHORTCUTS_CONFIG + '.tmp'
+        with open(temp_path, 'w', encoding='utf-8', newline='\n') as handle:
+            handle.write('# GGF Quick Launch shortcuts\n# Format: name=path\n')
+            for shortcut_name in sorted(filtered, key=str.casefold):
+                handle.write(f"{shortcut_name}={filtered[shortcut_name]}\n")
+        os.replace(temp_path, SHORTCUTS_CONFIG)
+
     def refresh_shortcuts(self):
         """Reload shortcuts"""
         self.shortcuts = self.load_shortcuts()
@@ -797,7 +907,7 @@ class GGFTray:
         visualizer_menu.add_command(label="Start Visualizer", command=lambda: invoke_menu_action('audio_visualizer'))
         click_label = "Click Through Off" if self.get_visualizer_state().get('click_through', False) else "Click Through"
         visualizer_menu.add_command(label=click_label, command=lambda: invoke_command("toggle_click_through"))
-        menu.add_cascade(label="Audio Visualizer", menu=visualizer_menu)
+        menu.add_cascade(label="Music Visualizer", menu=visualizer_menu)
 
         utility_menu = tk.Menu(menu, tearoff=0)
         utility_menu.add_command(label="HuggingFace Model Browser", command=lambda: invoke_menu_action('huggingface_browser'))
@@ -1138,8 +1248,10 @@ class GGFTray:
             
             # Use whisper command line directly
             # First check if whisper command is available
-            check_cmd = f'"{venv_python}" -m whisper --help'
-            result = subprocess.run(check_cmd, shell=True, capture_output=True, text=True)
+            result = subprocess.run(
+                [venv_python, '-m', 'whisper', '--help'],
+                capture_output=True, text=True,
+            )
             
             if result.returncode != 0:
                 # Whisper not installed as module, try to install it
@@ -1148,10 +1260,16 @@ class GGFTray:
                 return
             
             # Run whisper transcription
-            cmd = f'start cmd /k "{venv_python}" -m whisper "{self.current_file}" --model {whisper_model} --output_format txt --output_dir "{os.path.dirname(self.current_file)}" && echo Transcription saved to: {output_file} && pause'
-            
-            print(f"Running whisper command: {cmd}")
-            subprocess.Popen(cmd, shell=True)
+            launch_console_command(
+                [
+                    venv_python, '-m', 'whisper', self.current_file,
+                    '--model', whisper_model,
+                    '--output_format', 'txt',
+                    '--output_dir', os.path.dirname(self.current_file),
+                ],
+                cwd=os.path.dirname(self.current_file),
+                keep_open=True,
+            )
             
             self.show_message("Transcribing", 
                 f"Transcribing with Whisper ({whisper_model} model)...\n\n" +
@@ -1203,7 +1321,170 @@ class GGFTray:
             self.show_message("Error", f"Failed to save last frame:\n{str(e)}", "error")
     
     def install_ggf_app(self, zip_path=None, auto_confirm=False):
-        """Install a GGF app from zip file"""
+        """Safely extract a GGF package, confirm its installer, and register it."""
+        from tkinter import filedialog, messagebox, simpledialog
+
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes('-topmost', True)
+        install_dir = None
+        created_new_dir = False
+        marker_written = False
+        try:
+            if zip_path and os.path.isfile(zip_path):
+                archive_path = os.path.abspath(zip_path)
+            else:
+                archive_path = filedialog.askopenfilename(
+                    title="Select a GGF app package",
+                    filetypes=[("GGF packages", "*.zip *.rar *.7z"), ("ZIP files", "*.zip"), ("All files", "*.*")],
+                    parent=root,
+                )
+            if not archive_path:
+                return
+            extension = os.path.splitext(archive_path)[1].lower()
+            if extension not in {'.zip', '.rar', '.7z'}:
+                raise InstallSafetyError("Choose a ZIP, RAR, or 7z GGF package.")
+
+            default_base = os.path.join(os.path.expanduser('~'), 'GGF Apps')
+            os.makedirs(default_base, exist_ok=True)
+            install_base = filedialog.askdirectory(
+                title="Choose where this app should be installed",
+                initialdir=default_base,
+                parent=root,
+            )
+            if not install_base:
+                return
+
+            archive_name = os.path.splitext(os.path.basename(archive_path))[0]
+            path_parts = {part.casefold() for part in os.path.normpath(install_base).split(os.sep)}
+            direct_comfy = bool(path_parts.intersection({'comfyui', 'comfy'})) and messagebox.askyesno(
+                "Existing ComfyUI folder",
+                "This looks like an existing ComfyUI installation.\n\n"
+                "Extract this package directly into that folder?\n\n"
+                "GGF Tray will not run an installer or register a delete action for this direct extraction.",
+                parent=root,
+            )
+
+            if direct_comfy:
+                install_dir = os.path.abspath(install_base)
+            else:
+                requested_name = simpledialog.askstring(
+                    "App folder name",
+                    "Folder name for this app:",
+                    initialvalue=archive_name,
+                    parent=root,
+                )
+                if not requested_name:
+                    return
+                folder_name = sanitize_folder_name(requested_name)
+                install_dir = safe_install_path(install_base, folder_name)
+                if os.path.exists(install_dir) and os.listdir(install_dir):
+                    raise InstallSafetyError(
+                        "That installation folder already contains files. Choose a new folder name so an existing app is not overwritten."
+                    )
+                os.makedirs(install_dir, exist_ok=True)
+                created_new_dir = True
+
+            if not messagebox.askyesno(
+                "Confirm package extraction",
+                f"Package:\n{archive_path}\n\nDestination:\n{install_dir}\n\n"
+                "Extract these files now? No program will run until you confirm it separately.",
+                parent=root,
+            ):
+                return
+
+            file_count, expanded_size = extract_archive(archive_path, install_dir)
+            if direct_comfy:
+                size_text = f" ({expanded_size / (1024**2):.1f} MB)" if expanded_size is not None else ""
+                messagebox.showinfo(
+                    "Package extracted",
+                    f"Safely extracted {file_count:,} entries{size_text} into:\n{install_dir}\n\n"
+                    "No installer was run and no delete entry was created.",
+                    parent=root,
+                )
+                return
+
+            found = discover_install_files(install_dir)
+            installer_path = found['best_installer']
+            launcher_path = found['best_launcher']
+
+            if installer_path:
+                relative_installer = os.path.relpath(installer_path, install_dir)
+                if not messagebox.askyesno(
+                    "Installer found",
+                    f"GGF Tray found this installer:\n{relative_installer}\n\n"
+                    "Run this installer as administrator? Review the path before choosing Yes.",
+                    parent=root,
+                ):
+                    installer_path = None
+            elif found['installers']:
+                if messagebox.askyesno(
+                    "Choose installer",
+                    "Several possible installers were found, so GGF Tray did not guess.\n\nChoose the correct installer manually?",
+                    parent=root,
+                ):
+                    installer_path = filedialog.askopenfilename(
+                        title="Choose the installer",
+                        initialdir=install_dir,
+                        filetypes=[("Installers", "*.bat *.cmd *.exe"), ("All files", "*.*")],
+                        parent=root,
+                    ) or None
+
+            if launcher_path:
+                relative_launcher = os.path.relpath(launcher_path, install_dir)
+                if not messagebox.askyesno(
+                    "Quick Launch",
+                    f"Add this launcher to Quick Launch?\n{relative_launcher}",
+                    parent=root,
+                ):
+                    launcher_path = None
+
+            app_name = sanitize_folder_name(os.path.basename(install_dir))
+            write_install_marker(install_dir, app_name, archive_path, launcher_path)
+            marker_written = True
+            upsert_registry(INSTALLED_APPS_CONFIG, app_name, install_dir, launcher_path)
+            if launcher_path:
+                self.upsert_shortcut(app_name, launcher_path)
+
+            if installer_path:
+                installer_path = os.path.abspath(installer_path)
+                if os.path.normcase(os.path.commonpath([installer_path, install_dir])) != os.path.normcase(install_dir):
+                    raise InstallSafetyError("The selected installer is outside the extracted app folder.")
+                extension = os.path.splitext(installer_path)[1].lower()
+                if extension in {'.bat', '.cmd'}:
+                    parameters = f'/k ""{installer_path}""'
+                    result = ctypes.windll.shell32.ShellExecuteW(
+                        None, "runas", "cmd.exe", parameters, os.path.dirname(installer_path), 1
+                    )
+                elif extension == '.exe':
+                    result = ctypes.windll.shell32.ShellExecuteW(
+                        None, "runas", installer_path, None, os.path.dirname(installer_path), 1
+                    )
+                else:
+                    raise InstallSafetyError("Only BAT, CMD, and EXE installers can be launched.")
+                if not result or result <= 32:
+                    raise RuntimeError("Windows did not start the installer. It remains safely extracted for manual review.")
+
+            self.refresh_shortcuts()
+            messagebox.showinfo(
+                "GGF app prepared",
+                f"App folder:\n{install_dir}\n\n"
+                + ("The confirmed installer was started.\n" if installer_path else "No installer was run.\n")
+                + ("Quick Launch was added." if launcher_path else "You can add a launcher later from Quick Launch Manager."),
+                parent=root,
+            )
+        except InstallSafetyError as exc:
+            messagebox.showerror("Installation blocked for safety", str(exc), parent=root)
+        except Exception as exc:
+            messagebox.showerror("Installation failed", str(exc), parent=root)
+        finally:
+            if created_new_dir and install_dir and not marker_written:
+                shutil.rmtree(install_dir, ignore_errors=True)
+            root.destroy()
+
+    def _legacy_install_ggf_app(self, zip_path=None, auto_confirm=False):
+        """Retained only for source-history context; deliberately unreachable."""
+        raise RuntimeError("The legacy installer is disabled; use install_ggf_app().")
         import tkinter as tk
         from tkinter import filedialog, simpledialog, messagebox
         import zipfile
@@ -1289,7 +1570,7 @@ class GGFTray:
             ext = os.path.splitext(src)[1].lower()
             if ext == '.zip':
                 with zipfile.ZipFile(src, 'r') as z:
-                    z.extractall(dest)
+                    extract_archive(zip_file, dest)
             elif ext == '.rar':
                 # Try Windows built-in bsdtar first (Win10+)
                 result = subprocess.run(['tar', '-xf', src, '-C', dest],
@@ -1395,12 +1676,19 @@ class GGFTray:
                     )
                 elif best_installer:
                     installer_name = os.path.basename(best_installer)
-                    if auto_confirm or messagebox.askyesno(
-                        "Installer Found",
-                        f"Found installer: {installer_name}\n\n"
-                        f"Is this the correct installer to run?",
-                        parent=tk.Tk()
-                    ):
+                    if auto_confirm:
+                        confirm_installer = True
+                    else:
+                        _cr = tk.Tk(); _cr.withdraw(); _cr.attributes('-topmost', True)
+                        try:
+                            confirm_installer = messagebox.askyesno(
+                                "Installer Found",
+                                f"Found installer: {installer_name}\n\n"
+                                f"Is this the correct installer to run?",
+                                parent=_cr)
+                        finally:
+                            _cr.destroy()
+                    if confirm_installer:
                         install_bat = best_installer
                     else:
                         browse_root = tk.Tk()
@@ -1469,12 +1757,19 @@ class GGFTray:
                 
                 # Ask user if this is the right launcher to add to shortcuts
                 launcher_name = os.path.basename(best_launcher)
-                if auto_confirm or messagebox.askyesno(
-                    "Launcher Found",
-                    f"Found launcher: {launcher_name}\n\n"
-                    f"Add this to Quick Launch shortcuts?",
-                    parent=tk.Tk()
-                ):
+                if auto_confirm:
+                    confirm_launcher = True
+                else:
+                    _lr = tk.Tk(); _lr.withdraw(); _lr.attributes('-topmost', True)
+                    try:
+                        confirm_launcher = messagebox.askyesno(
+                            "Launcher Found",
+                            f"Found launcher: {launcher_name}\n\n"
+                            f"Add this to Quick Launch shortcuts?",
+                            parent=_lr)
+                    finally:
+                        _lr.destroy()
+                if confirm_launcher:
                     run_bat = best_launcher
                 else:
                     # Let user browse for a different launcher
@@ -1559,7 +1854,106 @@ class GGFTray:
             self.show_message("Error", f"Failed to install:\n{str(e)}", "error")
         
     def delete_ggf_app(self):
-        """Delete an installed GGF app"""
+        """Delete only a confirmed, safely registered GGF app folder."""
+        from tkinter import messagebox, simpledialog
+        import stat
+
+        apps = load_registry(INSTALLED_APPS_CONFIG)
+        if not apps:
+            self.show_message("No Apps", "No installed apps are registered.", "warning")
+            return
+
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes('-topmost', True)
+        try:
+            names = sorted(apps, key=str.casefold)
+            app_list = "\n".join(f"{index + 1}. {name}" for index, name in enumerate(names))
+            choice = simpledialog.askstring(
+                "Delete GGF app",
+                f"Enter the number of the app to remove:\n\n{app_list}",
+                parent=root,
+            )
+            if not choice or not choice.isdigit():
+                return
+            index = int(choice) - 1
+            if index < 0 or index >= len(names):
+                messagebox.showerror("Invalid selection", "That app number is not in the list.", parent=root)
+                return
+
+            app_name = names[index]
+            install_dir, _launcher = apps[app_name]
+            if not os.path.isdir(install_dir):
+                if messagebox.askyesno(
+                    "Remove stale entry?",
+                    f"The registered folder no longer exists:\n\n{install_dir}\n\n"
+                    "Remove only this broken entry from the GGF app list?",
+                    parent=root,
+                ):
+                    remove_registry_entry(INSTALLED_APPS_CONFIG, app_name)
+                    self.remove_shortcut(app_name)
+                    self.refresh_shortcuts()
+                return
+
+            safe, reason, has_marker = validate_delete_target(install_dir, SCRIPT_DIR)
+            if not safe:
+                messagebox.showerror("Delete blocked for safety", reason, parent=root)
+                return
+
+            running = []
+            target_norm = os.path.normcase(os.path.abspath(install_dir))
+            for process in psutil.process_iter(['pid', 'name', 'exe', 'cmdline']):
+                try:
+                    evidence = [process.info.get('exe') or '', *(process.info.get('cmdline') or [])]
+                    if any(
+                        value and os.path.commonpath([os.path.normcase(os.path.abspath(str(value))), target_norm]) == target_norm
+                        for value in evidence
+                    ):
+                        running.append(process.info.get('name') or str(process.pid))
+                except (OSError, ValueError, TypeError, psutil.Error):
+                    continue
+            if running:
+                messagebox.showerror(
+                    "App is still running",
+                    "Close these processes before deleting the app:\n" + "\n".join(sorted(set(running))[:10]),
+                    parent=root,
+                )
+                return
+
+            if not has_marker:
+                typed = simpledialog.askstring(
+                    "Legacy app confirmation",
+                    f"This older entry has no GGF safety marker.\n\nFolder:\n{install_dir}\n\n"
+                    f"Type the app name exactly to allow removal:\n{app_name}",
+                    parent=root,
+                )
+                if typed != app_name:
+                    return
+
+            if not messagebox.askyesno(
+                "Final delete confirmation",
+                f"Permanently delete this entire folder?\n\n{install_dir}\n\nThis cannot be undone.",
+                parent=root,
+            ):
+                return
+
+            def handle_remove_readonly(func, path, _exc):
+                os.chmod(path, stat.S_IWRITE)
+                func(path)
+
+            shutil.rmtree(install_dir, onerror=handle_remove_readonly)
+            remove_registry_entry(INSTALLED_APPS_CONFIG, app_name)
+            self.remove_shortcut(app_name)
+            self.refresh_shortcuts()
+            messagebox.showinfo("App deleted", f"Removed:\n{app_name}", parent=root)
+        except Exception as exc:
+            messagebox.showerror("Delete failed", str(exc), parent=root)
+        finally:
+            root.destroy()
+
+    def _legacy_delete_ggf_app(self):
+        """Retained only for source-history context; deliberately unreachable."""
+        raise RuntimeError("The legacy deletion path is disabled; use delete_ggf_app().")
         import tkinter as tk
         from tkinter import simpledialog
         import shutil
@@ -1743,9 +2137,7 @@ class GGFTray:
                 
             try:
                 if filepath.lower().endswith('.bat'):
-                    file_dir = os.path.dirname(filepath)
-                    file_name = os.path.basename(filepath)
-                    subprocess.Popen(f'start "GGF-{name}" cmd /k "cd /d "{file_dir}" && {file_name}"', shell=True)
+                    launch_console_command([filepath], cwd=os.path.dirname(filepath), keep_open=True)
                 else:
                     os.startfile(filepath)
             except Exception as e:
@@ -1818,12 +2210,6 @@ class GGFTray:
         import webbrowser
         webbrowser.open('https://getgoingfast.pro')
     
-    
-    def open_website(self):
-        """Open getgoingfast.pro in browser"""
-        import webbrowser
-        webbrowser.open('https://getgoingfast.pro')
-    
     def open_app_search(self):
         """Open app search dialog as standalone process"""
         try:
@@ -1861,12 +2247,7 @@ class GGFTray:
                 
             try:
                 if filepath.lower().endswith('.bat'):
-                    file_dir = os.path.dirname(filepath)
-                    file_name = os.path.basename(filepath)
-                    subprocess.Popen(
-                        f'start "GGF-{name}" cmd /k "cd /d "{file_dir}" && {file_name}"',
-                        shell=True
-                    )
+                    launch_console_command([filepath], cwd=os.path.dirname(filepath), keep_open=True)
                 else:
                     os.startfile(filepath)
             except Exception as e:
@@ -2396,7 +2777,7 @@ class GGFTray:
                 root.destroy()
         
         def do_login():
-            """Trigger Patreon login directly"""
+            """Trigger GGF login directly"""
             if not self.auth:
                 return
             
@@ -2448,7 +2829,7 @@ class GGFTray:
         else:
             script = os.path.abspath(__file__)
             print(f"Restarting: {python} {script}")
-            subprocess.Popen(f'start "" "{python}" "{script}"', shell=True)
+            subprocess.Popen([python, script], cwd=SCRIPT_DIR, env=get_subprocess_env())
         
         # Exit current process
         print("Exiting current instance...")
@@ -2544,7 +2925,7 @@ class GGFTray:
         menu_items.append(item('Video Operations', pystray.Menu(*video_items)))
         
         # AUDIO VISUALIZER as its own menu
-        menu_items.append(item('Audio Visualizer', pystray.Menu(*audio_visualizer_menu)))
+        menu_items.append(item('Music Visualizer', pystray.Menu(*audio_visualizer_menu)))
         
         # UTILITY submenu
         utility_items = [
@@ -2595,7 +2976,33 @@ class GGFTray:
         self.icon.run()
 
 if __name__ == "__main__":
-    if "--run-app-search" in sys.argv:
+    if "--self-test" in sys.argv:
+        failures = []
+        if not os.path.isfile(ICON_PATH):
+            failures.append(f"missing icon: {ICON_PATH}")
+        try:
+            os.makedirs(STATE_DIR, exist_ok=True)
+            probe = os.path.join(STATE_DIR, ".self-test")
+            with open(probe, "w", encoding="utf-8") as handle:
+                handle.write("ok")
+            os.remove(probe)
+        except Exception as exc:
+            failures.append(f"state directory is not writable: {exc}")
+        try:
+            sanitize_folder_name("GGF Test")
+            AuthManager()
+            import app_search
+            import audio_visualizer_tray
+            if not app_search.membership_allows_download("farm-hand", "fh"):
+                failures.append("catalog membership rules did not initialize")
+        except Exception as exc:
+            failures.append(f"helper initialization failed: {exc}")
+        if failures:
+            print("GGF Tray self-test FAILED: " + "; ".join(failures))
+            sys.exit(1)
+        print("GGF Tray self-test OK")
+        sys.exit(0)
+    elif "--run-app-search" in sys.argv:
         import app_search
         app_search.main()
     elif "--run-visualizer" in sys.argv:
@@ -2609,9 +3016,8 @@ if __name__ == "__main__":
             messagebox.showerror("Installer Error", "Missing ZIP path for installer.")
             sys.exit(1)
 
-        auto_confirm = "--auto-install" in sys.argv
         app = GGFTray()
-        app.install_ggf_app(zip_path=zip_path, auto_confirm=auto_confirm)
+        app.install_ggf_app(zip_path=zip_path)
     elif "--show-companion-menu" in sys.argv or "--show-visualizer-menu" in sys.argv:
         app = GGFTray()
         app.show_visualizer_companion_menu()

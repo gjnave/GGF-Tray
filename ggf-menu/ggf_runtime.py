@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 import ssl
 import subprocess
@@ -26,6 +27,22 @@ def get_resource_dir():
     if getattr(sys, "frozen", False):
         return getattr(sys, "_MEIPASS", os.path.dirname(sys.executable))
     return os.path.dirname(os.path.abspath(__file__))
+
+
+def get_state_dir():
+    """Return the per-user writable state folder used by logs and credentials."""
+    base = os.environ.get("LOCALAPPDATA") or os.path.join(os.path.expanduser("~"), "AppData", "Local")
+    state_dir = os.path.join(base, "GGF-Tray")
+    os.makedirs(state_dir, exist_ok=True)
+    return state_dir
+
+
+def redact_secrets(value):
+    """Remove bearer-style GGF tokens before a value reaches logs or errors."""
+    text = str(value)
+    text = re.sub(r"ggf_tray_[A-Za-z0-9_-]{24,}", "ggf_tray_[REDACTED]", text)
+    text = re.sub(r"([?&](?:token|app_token)=)[^&\s]+", r"\1[REDACTED]", text, flags=re.IGNORECASE)
+    return text
 
 
 def configure_ssl_environment(env=None):
@@ -84,4 +101,3 @@ def launch_console_command(command_args, cwd=None, env=None, keep_open=True):
         env=launch_env,
         creationflags=creationflags,
     )
-

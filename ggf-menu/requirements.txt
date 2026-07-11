@@ -9,3 +9,4 @@ imageio-ffmpeg
 PyQt6
 PyQt6-WebEngine
 pyaudiowpatch
+PyInstaller>=6.10,<7

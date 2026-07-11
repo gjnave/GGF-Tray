@@ -54,8 +54,8 @@ jobs:
             --name GGF-Tray-OneFile `
             --distpath ggf-menu/dist_onefile `
             --workpath ggf-menu/build_onefile `
-            --icon ggf-menu/logo.ico `
-            --add-data "ggf-menu/logo.ico;." `
+            --icon ggf-menu/logo-v2.ico `
+            --add-data "ggf-menu/logo-v2.ico;." `
             --collect-all certifi `
             --collect-all imageio_ffmpeg `
             --collect-all numpy `

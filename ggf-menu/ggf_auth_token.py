@@ -1,233 +1,278 @@
+"""First-party Get Going Fast desktop authentication.
+
+The tray creates a short random linking token, opens the current GGF member
+login in the browser, and polls the site until the member explicitly links the
+desktop app.  Cached bearer data is protected with Windows DPAPI.
 """
-GGF Patreon Authentication Manager - Token Based
-Simple, reliable auth without browser cookie access
-"""
+
+import ctypes
 import json
 import os
-import time
-import urllib.request
-import urllib.error
-import webbrowser
 import secrets
-from datetime import datetime, timedelta
-from ggf_runtime import configure_ssl_environment, urlopen_with_ssl
+import tempfile
+import time
+import urllib.error
+import urllib.request
+import webbrowser
+from ctypes import wintypes
+
+from ggf_runtime import (
+    configure_ssl_environment,
+    get_app_dir,
+    get_state_dir,
+    redact_secrets,
+    urlopen_with_ssl,
+)
+
 
 configure_ssl_environment()
+TOKEN_PATTERN_PREFIX = "ggf_tray_"
+DPAPI_UI_FORBIDDEN = 0x1
+
+
+class _DataBlob(ctypes.Structure):
+    _fields_ = [("cbData", wintypes.DWORD), ("pbData", ctypes.POINTER(ctypes.c_byte))]
+
+
+if os.name == "nt":
+    ctypes.windll.crypt32.CryptProtectData.argtypes = [
+        ctypes.POINTER(_DataBlob), wintypes.LPCWSTR, ctypes.c_void_p,
+        ctypes.c_void_p, ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(_DataBlob),
+    ]
+    ctypes.windll.crypt32.CryptProtectData.restype = wintypes.BOOL
+    ctypes.windll.crypt32.CryptUnprotectData.argtypes = [
+        ctypes.POINTER(_DataBlob), ctypes.c_void_p, ctypes.c_void_p,
+        ctypes.c_void_p, ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(_DataBlob),
+    ]
+    ctypes.windll.crypt32.CryptUnprotectData.restype = wintypes.BOOL
+    ctypes.windll.kernel32.LocalFree.argtypes = [ctypes.c_void_p]
+    ctypes.windll.kernel32.LocalFree.restype = ctypes.c_void_p
+
+
+def _dpapi_protect(payload: bytes) -> bytes:
+    if os.name != "nt":
+        raise RuntimeError("GGF Tray authentication requires Windows DPAPI.")
+    buffer = ctypes.create_string_buffer(payload)
+    in_blob = _DataBlob(len(payload), ctypes.cast(buffer, ctypes.POINTER(ctypes.c_byte)))
+    out_blob = _DataBlob()
+    ok = ctypes.windll.crypt32.CryptProtectData(
+        ctypes.byref(in_blob), "GGF Tray authentication", None, None, None,
+        DPAPI_UI_FORBIDDEN, ctypes.byref(out_blob),
+    )
+    if not ok:
+        raise ctypes.WinError()
+    try:
+        return ctypes.string_at(out_blob.pbData, out_blob.cbData)
+    finally:
+        ctypes.windll.kernel32.LocalFree(out_blob.pbData)
+
+
+def _dpapi_unprotect(payload: bytes) -> bytes:
+    if os.name != "nt":
+        raise RuntimeError("GGF Tray authentication requires Windows DPAPI.")
+    buffer = ctypes.create_string_buffer(payload)
+    in_blob = _DataBlob(len(payload), ctypes.cast(buffer, ctypes.POINTER(ctypes.c_byte)))
+    out_blob = _DataBlob()
+    ok = ctypes.windll.crypt32.CryptUnprotectData(
+        ctypes.byref(in_blob), None, None, None, None,
+        DPAPI_UI_FORBIDDEN, ctypes.byref(out_blob),
+    )
+    if not ok:
+        raise ctypes.WinError()
+    try:
+        return ctypes.string_at(out_blob.pbData, out_blob.cbData)
+    finally:
+        ctypes.windll.kernel32.LocalFree(out_blob.pbData)
+
 
 class AuthManager:
-    def __init__(self, cache_file="auth_cache.json"):
-        self.cache_file = cache_file
+    def __init__(self, cache_file=None):
+        self.cache_file = cache_file or os.path.join(get_state_dir(), "auth_cache.dat")
+        self.legacy_cache_files = {
+            os.path.join(get_state_dir(), "auth_cache.json"),
+            os.path.join(get_app_dir(), "auth_cache.json"),
+        }
         self.verify_url = "https://getgoingfast.pro/app-auth-check.php"
-        self.login_url = "https://getgoingfast.pro/patreon-login.php"
+        self.login_url = "https://getgoingfast.pro/app-link.php"
         self.cached_auth = None
         self.load_cache()
-    
-    def load_cache(self):
-        """Load cached auth from disk"""
-        if os.path.exists(self.cache_file):
+
+    def _load_legacy_cache(self):
+        for path in self.legacy_cache_files:
+            if not os.path.isfile(path):
+                continue
             try:
-                with open(self.cache_file, 'r') as f:
-                    self.cached_auth = json.load(f)
-                    # Check if expired
-                    if self.cached_auth.get('expires', 0) < time.time():
-                        print("Cached auth expired")
-                        self.cached_auth = None
-            except Exception as e:
-                print(f"Error loading auth cache: {e}")
-                self.cached_auth = None
-    
-    def save_cache(self, auth_data):
-        """Save auth to disk cache"""
-        try:
-            with open(self.cache_file, 'w') as f:
-                json.dump(auth_data, f, indent=2)
-            self.cached_auth = auth_data
-        except Exception as e:
-            print(f"Error saving auth cache: {e}")
-    
-    def clear_cache(self):
-        """Clear cached auth"""
-        self.cached_auth = None
-        if os.path.exists(self.cache_file):
-            try:
-                os.remove(self.cache_file)
-            except:
-                pass
-    
-    def generate_token(self):
-        """Generate a unique auth token"""
-        return f"ggf_tray_{secrets.token_urlsafe(32)}"
-    
-    def check_token(self, token):
-        """
-        Check if token has been validated on server
-        Returns auth data dict or None
-        """
-        try:
-            url = f"{self.verify_url}?token={token}"
-            req = urllib.request.Request(url)
-            req.add_header('User-Agent', 'GGF-Tray-App/1.0')
-            
-            with urlopen_with_ssl(req, timeout=10) as response:
-                data = json.loads(response.read().decode('utf-8'))
-                
-                if data.get('authenticated'):
-                    auth_data = {
-                        'tier': data.get('tier', 'free'),
-                        'name': data.get('name', 'User'),
-                        'expires': time.time() + (14 * 24 * 60 * 60),  # 2 weeks
-                        'token': token,
-                        'verified_at': time.time()
-                    }
-                    return auth_data
-                else:
-                    return None
-                    
-        except urllib.error.URLError as e:
-            # Server unreachable - not an error, just not validated yet
-            return None
-        except Exception as e:
-            print(f"Error checking token: {e}")
-            return None
-    
-    def get_auth(self, force_refresh=False):
-        """
-        Get current authentication state
-        Returns: {tier, name, expires} or None
-        """
-        # If we have valid cached auth and not forcing refresh, use it
-        if not force_refresh and self.cached_auth:
-            # Check if expired
-            if self.cached_auth.get('expires', 0) > time.time():
-                # Re-verify every hour to catch revoked access
-                if self.cached_auth.get('verified_at', 0) > time.time() - 3600:
-                    return self.cached_auth
-                
-                # Try to re-verify with token
-                token = self.cached_auth.get('token')
-                if token:
-                    auth_data = self.check_token(token)
-                    if auth_data:
-                        self.save_cache(auth_data)
-                        return auth_data
-        
+                with open(path, "r", encoding="utf-8") as handle:
+                    data = json.load(handle)
+                if isinstance(data, dict):
+                    self.save_cache(data)
+                    try:
+                        os.remove(path)
+                    except OSError:
+                        pass
+                    return data
+            except (OSError, ValueError, TypeError):
+                continue
         return None
-    
+
+    def load_cache(self):
+        """Load the current user's DPAPI-protected authentication cache."""
+        data = None
+        if os.path.isfile(self.cache_file):
+            try:
+                with open(self.cache_file, "rb") as handle:
+                    encrypted = handle.read()
+                data = json.loads(_dpapi_unprotect(encrypted).decode("utf-8"))
+            except Exception as exc:
+                print(f"Could not read protected login cache: {redact_secrets(exc)}")
+        if not isinstance(data, dict):
+            data = self._load_legacy_cache()
+        if isinstance(data, dict) and data.get("expires", 0) > time.time():
+            self.cached_auth = data
+        else:
+            self.cached_auth = None
+            if os.path.exists(self.cache_file):
+                try:
+                    os.remove(self.cache_file)
+                except OSError:
+                    pass
+
+    def save_cache(self, auth_data):
+        """Atomically save auth data encrypted for the current Windows user."""
+        os.makedirs(os.path.dirname(os.path.abspath(self.cache_file)), exist_ok=True)
+        encoded = json.dumps(auth_data, separators=(",", ":")).encode("utf-8")
+        protected = _dpapi_protect(encoded)
+        fd, temp_path = tempfile.mkstemp(prefix="ggf-auth-", suffix=".tmp", dir=os.path.dirname(self.cache_file))
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(protected)
+            os.replace(temp_path, self.cache_file)
+            self.cached_auth = auth_data
+        finally:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+
+    def clear_cache(self):
+        self.cached_auth = None
+        for path in {self.cache_file, *self.legacy_cache_files}:
+            try:
+                if os.path.exists(path):
+                    os.remove(path)
+            except OSError:
+                pass
+
+    @staticmethod
+    def generate_token():
+        return TOKEN_PATTERN_PREFIX + secrets.token_urlsafe(32)
+
+    def check_token(self, token):
+        """Return verified auth data, or None while unlinked/unavailable."""
+        try:
+            req = urllib.request.Request(
+                self.verify_url,
+                headers={
+                    "User-Agent": "GGF-Tray-App/0.12",
+                    "X-GGF-App-Token": token,
+                    "Cache-Control": "no-store",
+                },
+            )
+            with urlopen_with_ssl(req, timeout=10) as response:
+                data = json.loads(response.read().decode("utf-8"))
+            if not data.get("authenticated"):
+                return None
+            server_expires = int(data.get("expires") or 0)
+            if server_expires <= int(time.time()):
+                return None
+            return {
+                "tier": data.get("tier", "free"),
+                "name": data.get("name", "User"),
+                "expires": server_expires,
+                "token": token,
+                "verified_at": time.time(),
+            }
+        except urllib.error.HTTPError as exc:
+            if exc.code not in {400, 401, 403, 404}:
+                print(f"Login check failed with HTTP {exc.code}")
+            return None
+        except urllib.error.URLError:
+            return None
+        except Exception as exc:
+            print(f"Error checking login: {redact_secrets(exc)}")
+            return None
+
+    def get_auth(self, force_refresh=False):
+        if not self.cached_auth:
+            return None
+        if self.cached_auth.get("expires", 0) <= time.time():
+            self.clear_cache()
+            return None
+        if not force_refresh and self.cached_auth.get("verified_at", 0) > time.time() - 3600:
+            return self.cached_auth
+        token = self.cached_auth.get("token")
+        if not token:
+            self.clear_cache()
+            return None
+        refreshed = self.check_token(token)
+        if refreshed:
+            self.save_cache(refreshed)
+            return refreshed
+        return None
+
     def login(self):
-        """
-        Start login flow - generates token and opens browser
-        Returns the token for polling
-        """
         token = self.generate_token()
         login_url = f"{self.login_url}?app=tray&app_token={token}"
-        
-        print("=" * 60)
-        print("Opening browser for Patreon login...")
-        print(f"Token: {token}")
-        print("=" * 60)
-        
+        print("Opening the browser for Get Going Fast login...")
         webbrowser.open(login_url)
         return token
-    
+
     def poll_for_auth(self, token, timeout=300, interval=2):
-        """
-        Poll server to check if token has been validated
-        Returns auth data when validated or None on timeout
-        
-        timeout: seconds to wait (default 5 minutes)
-        interval: seconds between checks (default 2 seconds)
-        """
         start_time = time.time()
-        attempts = 0
-        
-        print("Waiting for Patreon login...")
-        
         while time.time() - start_time < timeout:
-            attempts += 1
             auth_data = self.check_token(token)
-            
             if auth_data:
-                print(f"\n✓ Login successful!")
-                print(f"  Name: {auth_data['name']}")
-                print(f"  Tier: {auth_data['tier']}")
                 self.save_cache(auth_data)
+                print(f"Login successful for {auth_data['name']} ({auth_data['tier']}).")
                 return auth_data
-            
-            # Show progress every 10 attempts
-            if attempts % 10 == 0:
-                elapsed = int(time.time() - start_time)
-                print(f"  Still waiting... ({elapsed}s)")
-            
             time.sleep(interval)
-        
-        print("\n✗ Login timeout - please try again")
+        print("Login timed out. Please try again.")
         return None
-    
+
     def get_tier(self):
-        """Get user's tier (free/prairie-dog/premium)"""
         auth = self.get_auth()
-        return auth['tier'] if auth else 'free'
-    
+        return auth["tier"] if auth else "free"
+
     def get_name(self):
-        """Get user's name"""
         auth = self.get_auth()
-        return auth['name'] if auth else None
-    
+        return auth["name"] if auth else None
+
     def is_authenticated(self):
-        """Check if user is authenticated"""
         return self.get_auth() is not None
-    
+
     def has_tier_access(self, required_tier):
-        """
-        Check if user has access to a specific tier
-        Tier hierarchy: premium > prairie-dog > free
-        """
-        user_tier = self.get_tier()
-        
         tier_levels = {
-            'free': 0,
-            'prairie-dog': 1,
-            'premium': 2
+            "free": 0,
+            "prairie-dog": 1,
+            "farm-hand": 2,
+            "rancher": 3,
+            "gunslinger": 4,
         }
-        
-        return tier_levels.get(user_tier, 0) >= tier_levels.get(required_tier, 0)
-    
+        return tier_levels.get(self.get_tier(), 0) >= tier_levels.get(required_tier, 99)
+
     def format_tier_name(self, tier=None):
-        """Format tier name for display"""
-        if tier is None:
-            tier = self.get_tier()
-        
-        tier_names = {
-            'free': 'Free',
-            'prairie-dog': 'Prairie Dog',
-            'farm-hand': 'Farm Hand',
-            'rancher': 'Rancher',
-            'gunslinger': 'Gunslinger'
+        tier = self.get_tier() if tier is None else tier
+        names = {
+            "free": "Free",
+            "prairie-dog": "Prairie Dog",
+            "farm-hand": "Farm Hand",
+            "rancher": "Rancher",
+            "gunslinger": "Gunslinger",
         }
-        
-        return tier_names.get(tier, tier.title())
+        return names.get(tier, str(tier).replace("-", " ").title())
+
 
 if __name__ == "__main__":
-    # Test the auth manager
-    auth = AuthManager()
-    
-    print("=" * 50)
-    print("GGF Auth Manager Test")
-    print("=" * 50)
-    
-    if auth.is_authenticated():
-        print(f"✓ Authenticated as: {auth.get_name()}")
-        print(f"  Tier: {auth.format_tier_name()}")
-        print(f"  Has prairie-dog access: {auth.has_tier_access('prairie-dog')}")
-        print(f"  Has premium access: {auth.has_tier_access('premium')}")
+    manager = AuthManager()
+    if manager.is_authenticated():
+        print(f"Authenticated as {manager.get_name()} ({manager.format_tier_name()}).")
     else:
-        print("✗ Not authenticated")
-        print("\nStarting login flow...")
-        token = auth.login()
-        print(f"\nPolling for authentication...")
-        result = auth.poll_for_auth(token)
-        
-        if result:
-            print("\n✓ Successfully authenticated!")
-        else:
-            print("\n✗ Authentication failed or timed out")
+        print("Not authenticated.")
