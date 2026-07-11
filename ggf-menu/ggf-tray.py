@@ -529,7 +529,7 @@ class GGFTray:
             if f"--app-id={APP_ID}" in cmd_text or "--run-visualizer" in cmd_text:
                 yield proc
 
-    def start_audio_visualizer(self):
+    def start_audio_visualizer(self, force_tour=False):
         if not getattr(sys, 'frozen', False):
             visualizer_path = os.path.join(SCRIPT_DIR, "audio_visualizer_tray.py")
         else:
@@ -555,6 +555,8 @@ class GGFTray:
                 args = [sys.executable, "--run-visualizer", f"--app-id={APP_ID}"]
             else:
                 args = [sys.executable, visualizer_path, f"--app-id={APP_ID}"]
+            if force_tour:
+                args.append("--tour")
 
             self.track_process(subprocess.Popen(
                 args,
@@ -724,6 +726,8 @@ class GGFTray:
             self.huggingface_model_browser()
         elif action == 'audio_visualizer':
             self.start_audio_visualizer()
+        elif action == 'show_tour':
+            self.start_audio_visualizer(force_tour=True)
         elif action in ['convert_jpg', 'convert_png', 'convert_webp', 'convert_bmp',
                         'convert_wav', 'convert_mp3', 'convert_aac', 'convert_flac', 'convert_ogg',
                         'resize_image', 'convert_video', 'shrink_video',
@@ -2856,6 +2860,7 @@ class GGFTray:
         # Audio Visualizer submenu (define BEFORE using it)
         audio_visualizer_menu = [
             item('Start Visualizer', lambda: self.open_menu_for('audio_visualizer')),
+            item('Show Welcome Tour', lambda: self.open_menu_for('show_tour')),
             item(
                 'Click Through',
                 self.toggle_click_through,
