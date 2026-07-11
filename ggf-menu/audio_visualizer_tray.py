@@ -276,6 +276,71 @@ class SettingsWindow(QWidget):
         self.hide()
 
 
+class TourOverlay(QWidget):
+    """Tiny first-run walkthrough shown over the visualizer. Fail-safe: any error
+    just closes it, leaving the visualizer fully usable."""
+
+    def __init__(self, parent, steps, on_done=None):
+        super().__init__(parent)
+        self._steps = steps
+        self._idx = 0
+        self._on_done = on_done
+        self.setGeometry(0, 0, parent.width(), parent.height())
+        self.setStyleSheet("background: rgba(8, 10, 24, 205);")
+
+        self._card = QWidget(self)
+        self._card.setStyleSheet(
+            "background:#12142b; border:1px solid #2b2f55; border-radius:12px;")
+        cl = QVBoxLayout(self._card)
+        cl.setContentsMargins(16, 16, 16, 14)
+        cl.setSpacing(12)
+        self._label = QLabel("", self._card)
+        self._label.setWordWrap(True)
+        self._label.setStyleSheet(
+            "color:#eef; font-size:12px; background:transparent; border:none;")
+        cl.addWidget(self._label)
+        self._btn = QPushButton("", self._card)
+        self._btn.setStyleSheet(
+            "QPushButton{background:#00d9ff;color:#08122a;border:none;border-radius:6px;"
+            "padding:7px 14px;font-weight:bold;} QPushButton:hover{background:#33e2ff;}")
+        self._btn.clicked.connect(self._advance)
+        cl.addWidget(self._btn, alignment=Qt.AlignmentFlag.AlignRight)
+        self._card.setFixedWidth(min(330, max(200, self.width() - 24)))
+        self._render()
+        self.show()
+        self.raise_()
+
+    def _render(self):
+        text, is_last = self._steps[self._idx]
+        self._label.setText(text)
+        self._btn.setText("Got it!" if is_last else "Next →")
+        self._card.adjustSize()
+        cx = (self.width() - self._card.width()) // 2
+        cy = (self.height() - self._card.height()) // 2
+        self._card.move(max(6, cx), max(6, cy))
+
+    def _advance(self):
+        self._idx += 1
+        if self._idx >= len(self._steps):
+            if self._on_done:
+                try:
+                    self._on_done()
+                except Exception:
+                    pass
+            self.close()
+            self.deleteLater()
+            return
+        self._render()
+
+    def resizeEvent(self, event):
+        try:
+            self.setGeometry(0, 0, self.parent().width(), self.parent().height())
+            self._card.setFixedWidth(min(330, max(200, self.width() - 24)))
+            self._render()
+        except Exception:
+            pass
+
+
 class VisualizerWindow(QMainWindow):
     device_error = pyqtSignal(str)
     device_success = pyqtSignal(str)
@@ -336,7 +401,39 @@ class VisualizerWindow(QMainWindow):
         
         # Write initial state file
         self.write_state_file()
-        
+
+    def show_intro_tour(self):
+        """First-run walkthrough over the visualizer (menu button + options)."""
+        try:
+            if getattr(self, '_tour_overlay', None) is not None:
+                return
+            steps = [
+                ("🎵  Welcome to the GGF Music Visualizer!\n\n"
+                 "It reacts live to whatever audio is playing on your PC — "
+                 "play a song and watch it move.", False),
+                ("Click the “Menu” button in the bottom-right corner for "
+                 "visual modes, particle and speed settings, and to choose which "
+                 "speakers it listens to.", False),
+                ("You’re all set — enjoy the show!\n\n"
+                 "You can reopen the visualizer anytime from the GGF tray menu.", True),
+            ]
+
+            def _done():
+                self._tour_overlay = None
+                self._mark_tour_seen()
+
+            self._tour_overlay = TourOverlay(self, steps, on_done=_done)
+        except Exception as e:
+            log_visualizer(f"Intro tour failed: {e}")
+
+    def _mark_tour_seen(self):
+        try:
+            self.config['tourSeen'] = True
+            with open(CONFIG_PATH, 'w') as f:
+                json.dump(self.config, f, indent=2)
+        except Exception:
+            pass
+
     def init_ui(self):
         self.setWindowTitle("Music Visualizer")
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | 
@@ -2520,6 +2617,10 @@ def main():
     config = load_config()
     window = VisualizerWindow(config)
     window.show()
+    # First time the visualizer opens (or when launched with --tour), run the
+    # short intro walkthrough once, after the window has settled.
+    if ("--tour" in sys.argv) or (not config.get("tourSeen")):
+        QTimer.singleShot(1100, window.show_intro_tour)
     return app.exec()
 
 

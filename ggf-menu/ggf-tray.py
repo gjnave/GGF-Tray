@@ -327,77 +327,27 @@ class GGFTray:
         self.helper_processes = []
 
     def show_startup_tips_if_needed(self):
-        if not self.ui_state.get("show_tips_on_startup", True):
+        # First run only: bring up the Music Visualizer, which runs its own short
+        # intro tour (menu button + options). Replaces the old text tips popup.
+        try:
+            if self.ui_state.get("intro_shown"):
+                return
+            self.ui_state["intro_shown"] = True
+            self.save_ui_state()
+        except Exception:
             return
+
         if self.tips_thread and self.tips_thread.is_alive():
             return
 
-        def tips_worker():
+        def intro_worker():
             time.sleep(1.5)
-            root = tk.Tk()
-            root.title("GGF Tray Tips")
-            root.attributes('-topmost', True)
-            root.resizable(False, False)
-            root.configure(bg="#111111")
+            try:
+                self.start_audio_visualizer()
+            except Exception:
+                pass
 
-            width = 430
-            height = 250
-            screen_width = root.winfo_screenwidth()
-            screen_height = root.winfo_screenheight()
-            pos_x = max(20, screen_width - width - 20)
-            pos_y = max(20, screen_height - height - 90)
-            root.geometry(f"{width}x{height}+{pos_x}+{pos_y}")
-
-            title = tk.Label(
-                root,
-                text="How to use GGF Tray",
-                font=("Segoe UI", 12, "bold"),
-                fg="white",
-                bg="#111111"
-            )
-            title.pack(anchor="w", padx=14, pady=(12, 6))
-
-            body = (
-                "- Right-click the tray icon for A.I. Apps, conversions, utility tools, and restart/quit.\n\n"
-                "- Double-click the tray icon to open the Music Visualizer instantly.\n\n"
-                "- Use the visualizer Menu button for quick access when the tray icon is hidden.\n\n"
-                "- Clipboard-based conversions work after selecting a file in Explorer and pressing Ctrl+C."
-            )
-            label = tk.Label(
-                root,
-                text=body,
-                justify="left",
-                wraplength=400,
-                fg="white",
-                bg="#111111",
-                font=("Segoe UI", 10)
-            )
-            label.pack(anchor="w", padx=14)
-
-            show_again = tk.BooleanVar(value=self.ui_state.get("show_tips_on_startup", True))
-            checkbox = tk.Checkbutton(
-                root,
-                text="Show this tip next launch",
-                variable=show_again,
-                fg="white",
-                bg="#111111",
-                activebackground="#111111",
-                activeforeground="white",
-                selectcolor="#222222"
-            )
-            checkbox.pack(anchor="w", padx=14, pady=(10, 6))
-
-            def close_tips():
-                self.ui_state["show_tips_on_startup"] = bool(show_again.get())
-                self.save_ui_state()
-                root.destroy()
-
-            button = tk.Button(root, text="Close", command=close_tips, width=10)
-            button.pack(anchor="e", padx=14, pady=(0, 12))
-            root.protocol("WM_DELETE_WINDOW", close_tips)
-            root.mainloop()
-
-        self.tips_thread = threading.Thread(target=tips_worker, daemon=False)
+        self.tips_thread = threading.Thread(target=intro_worker, daemon=True)
         self.tips_thread.start()
 
     def start_command_server(self):

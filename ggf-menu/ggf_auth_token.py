@@ -168,8 +168,14 @@ class AuthManager:
     def check_token(self, token):
         """Return verified auth data, or None while unlinked/unavailable."""
         try:
+            # Send the token BOTH as a header (preferred -- keeps it out of most
+            # logs) and as a ?token= query param (fallback for a server that only
+            # reads the query). The token is URL-safe by construction, so it needs
+            # no escaping. This makes login work whether or not the header-aware
+            # app-auth-check.php has been deployed yet.
+            sep = "&" if "?" in self.verify_url else "?"
             req = urllib.request.Request(
-                self.verify_url,
+                f"{self.verify_url}{sep}token={token}",
                 headers={
                     "User-Agent": "GGF-Tray-App/0.12",
                     "X-GGF-App-Token": token,
