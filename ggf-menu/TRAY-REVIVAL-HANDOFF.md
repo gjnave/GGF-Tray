@@ -1,5 +1,13 @@
 # GGF Tray — Revival Handoff
 
+> ## 🔁 STANDING RULE: UPDATE THIS HANDOFF AT THE END OF EVERY RUN
+> Before finishing any session that touches the tray, append what changed —
+> files/fixes, the current built exe (path + size + date), what's pushed to GitHub
+> (commit/tag), and what's left to test or deploy — and keep the CURRENT STATUS
+> block below accurate. Do it unprompted, every run, so the next session starts
+> from truth. (Same applies to the site handoff `GGF-CODEX-HANDOFF.md` and the
+> agent memory `ggf-tray-app`.)
+
 ## CURRENT STATUS — v0.12.0 BUILT AND VERIFIED 2026-07-11
 
 The revival is no longer source-only. The current local release is:
@@ -42,6 +50,40 @@ work end-to-end from **local source + local build tools + local backups** if
 GitHub ever pulls the rug. So: mirror everything to GitHub (good redundancy), but
 keep the local copy authoritative and fully independent. Same stance as Patreon —
 use it, don't depend on it.
+
+### Session addendum — 2026-07-11 (continued)
+
+More fixes landed after the v0.12.0 build above (all committed + pushed to
+`gjnave/GGF-Tray` `main`; the local build stays authoritative):
+
+- **Login works WITHOUT a server deploy.** The tray sent the verify token only as
+  the `X-GGF-App-Token` header, but the LIVE `app-auth-check.php` still reads
+  `?token=`. `check_token` now sends BOTH (token is URL-safe). Verified live:
+  `authenticated:true, tier:rancher`.
+- **Downloads work WITHOUT a server deploy.** Same header-only bug in the download
+  path — `download_selected` / `DownloadWorker` now include `?token=` too. Verified
+  live: `download-api.php?slug=dramabox&token=…` → HTTP 200.
+- **Intro tour reworked.** Scrapped the old "How to use GGF Tray" startup text
+  popup. First run now auto-launches the visualizer, which runs a 3-card tour
+  welcoming users to the **GGF Toolbar** (AI apps / media conversions / utilities
+  via the Menu button + tray icon); the visualizer is framed as just one feature.
+  Shown once via a `tourSeen` flag; tray-icon pointing intentionally omitted.
+- **Settings X no longer quits the visualizer** — `setQuitOnLastWindowClosed(False)`
+  + a `SettingsWindow.closeEvent` that hides instead of closing.
+- **Quicklaunch cleaned for distro** — emptied `shortcuts.txt` / `installed_apps.txt`
+  and stopped git-tracking per-user runtime state (`shortcuts.txt`,
+  `installed_apps.txt`, `visualizer_config.json`, `auth_cache.dat`).
+- **App search favorites-first** — catalog `fav` apps float to the top of results.
+- **Icon = `logo-v2.ico`** (brain + cables + exclamations) consistent across
+  `ggf-tray.py`, the `.spec`, and the CI workflow.
+- **Current local exe:** `dist_onefile/GGF-Tray-OneFile.exe`, ~254,867,960 bytes,
+  built 2026-07-11 15:41 (Python 3.11 + PyInstaller 6.21 via the fresh `build-venv`;
+  the old `venv` is dead — its base Python was removed). **GitHub:** `main` through
+  commit `ffd206a`; tag `v0.12` pushed → CI release workflow. Still **unsigned**.
+- **Still to do:** owner deploys the 4 site files
+  (`Downloads\GGF-tray-v012-2026-07-11\`) for header-based auth + live-tier rechecks
+  (login/download already work without it via the query fallback); confirm
+  tour + favorites + download on the new exe; code-sign the exe.
 
 ---
 
