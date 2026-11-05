@@ -37,5 +37,6 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           sha256sum --check --strict SHA256SUMS.txt
+          python3 ../scripts/download_page.py notes "$RUNNER_TEMP/ggf-release.md" --tag "$RELEASE_TAG" --art-ref "$GITHUB_SHA"
           gh release create "$RELEASE_TAG" GGF-Tray-Windows-x64.zip GGF-Tray-OneFile.exe SHA256SUMS.txt \
-            --verify-tag --title "GGF Tray $RELEASE_TAG for Windows" --notes-file ../.github/release-notes.md
+            --verify-tag --title "GGF Tray $RELEASE_TAG for Windows" --notes-file "$RUNNER_TEMP/ggf-release.md"

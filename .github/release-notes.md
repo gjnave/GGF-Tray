@@ -1,7 +1,18 @@
-Download **GGF-Tray-Windows-x64.zip** from Assets below. Quit any running GGF Tray, extract the ZIP, then double-click **Install GGF Tray.bat**. Look for the turquoise G by the Windows clock.
+![Get Going Fast · GGF Tray for Windows](https://raw.githubusercontent.com/gjnave/GGF-Tray/@@REF@@/downloads/release-banner.svg)
 
-Browse the catalog as a guest. To download an app your membership includes, choose **Sign in**, match the code in your browser, and choose **Link Desktop App**. If website login takes you to the member homepage, choose **Continue in browser** in the catalog.
+**@@TAG@@ · @@DATE@@ · Windows x64**
 
-For a standalone copy, download **GGF-Tray-OneFile.exe**. First setup downloads about 288 MiB of third-party components directly from PyPI and verifies their hashes. **SHA256SUMS.txt** contains the hashes of the two GGF downloads.
+### [Download the installer ZIP](https://github.com/gjnave/GGF-Tray/releases/download/@@TAG@@/GGF-Tray-Windows-x64.zip)
 
-The official GGF application is licensed for end-user operation in its unmodified form. Third-party libraries retain their own licenses. The ZIP includes the full GGF terms in **LICENSE.txt**.
+**Recommended for most people.** The installer adds GGF Tray to the Windows Start menu and sets it to start silently when you sign in.
+
+1. Quit GGF Tray if an older version is running.
+2. Extract the ZIP and double-click **Install GGF Tray.bat**. First setup downloads about 288 MiB of components.
+3. Right-click the turquoise **G** near the Windows clock and choose **Browse App Catalog**.
+
+| Other files | When to choose them |
+| --- | --- |
+| [Standalone EXE](https://github.com/gjnave/GGF-Tray/releases/download/@@TAG@@/GGF-Tray-OneFile.exe) | Run GGF Tray directly. It uses the same first-time setup. |
+| [SHA-256 checksums](https://github.com/gjnave/GGF-Tray/releases/download/@@TAG@@/SHA256SUMS.txt) | Verify a downloaded ZIP or EXE. |
+
+[Compare versions and release dates](https://gjnave.github.io/GGF-Tray/#versions) · [Read the license](https://github.com/gjnave/GGF-Tray/blob/@@TAG@@/LICENSE.txt)

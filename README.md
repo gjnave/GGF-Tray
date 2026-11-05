@@ -2,7 +2,9 @@
 
 Browse the GGF app catalog, install tools your membership includes, and launch them again from the tray. The tray also includes media conversion, a music player and a Hugging Face model browser.
 
-**[Download the Windows x64 installer ZIP](https://github.com/gjnave/GGF-Tray/releases/latest/download/GGF-Tray-Windows-x64.zip)**
+**[Get GGF Tray for Windows](https://gjnave.github.io/GGF-Tray/)** · [Download the latest installer ZIP directly](https://github.com/gjnave/GGF-Tray/releases/latest/download/GGF-Tray-Windows-x64.zip)
+
+The download page shows the recommended installer, its release date, and earlier versions.
 
 Quit any running GGF Tray, extract the ZIP, then double-click **Install GGF Tray.bat**. The turquoise G appears by the Windows clock. Right-click it to open the catalog or change **Start silently with Windows**.
 

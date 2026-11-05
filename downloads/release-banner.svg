@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 172" width="960" height="172">
+  <title>Get Going Fast · GGF Tray for Windows</title>
+  <defs><linearGradient id="bg"><stop stop-color="#0b292a"/><stop offset="1" stop-color="#235b50"/></linearGradient></defs>
+  <rect width="960" height="172" rx="18" fill="url(#bg)"/>
+  <g fill="none" stroke="#77bdae" opacity=".25" stroke-width="2">
+    <path d="m666 173 139-139h94m-188 139L838 46h123m-194 127 110-110h84"/>
+  </g>
+  <g transform="translate(32 39) scale(1.48)">
+    <rect x="1" y="3" width="62" height="58" rx="13" fill="#102d3a"/>
+    <rect x="3" y="5" width="58" height="54" rx="11" fill="#40efd2"/>
+    <path fill="#102d3a" d="M50 20 43 13H23L12 24v17l10 10h21l9-9v-6h5L46 25v4H32v8h11v2l-4 4H26l-6-6v-9l7-7h12l5 5z"/>
+  </g>
+  <g font-family="Segoe UI, Arial, sans-serif"><text x="148" y="65" fill="#a2e4d2" font-size="21" font-weight="600">Get Going Fast</text><text x="145" y="120" fill="#f4fcf7" font-size="49" font-weight="700">GGF Tray for Windows</text></g>
+</svg>
