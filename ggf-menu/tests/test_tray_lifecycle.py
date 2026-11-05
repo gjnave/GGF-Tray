@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from ggf_catalog_window import CatalogOwner, activate_existing
+from ggf_catalog_window import CatalogOwner, activate_existing, ready_for_catalog_upgrade
 from ggf_startup import configure, paths
 from ggf_welcome_state import welcome_seen, remember_welcome, managed_install, tray_notice_marker
 
@@ -33,6 +33,17 @@ class TrayLifecycleTests(unittest.TestCase):
         new=CatalogOwner()
         try: self.assertTrue(new.primary)
         finally: new.release()
+
+    def test_catalog_surviving_its_tray_blocks_upgrade_until_closed(self):
+        owner = CatalogOwner()
+        try:
+            self.assertFalse(ready_for_catalog_upgrade(interactive=False))
+            with patch("ggf_catalog_window.user.MessageBoxW", return_value=2):
+                self.assertFalse(ready_for_catalog_upgrade(interactive=True))
+            self.assertEqual(owner.consume(), (False, False))
+        finally:
+            owner.release()
+        self.assertTrue(ready_for_catalog_upgrade(interactive=False))
 
     def test_startup_opt_out_persists_and_can_be_reenabled(self):
         self.assertTrue(configure("install"))

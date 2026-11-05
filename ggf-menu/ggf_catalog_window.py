@@ -46,6 +46,26 @@ def event_name(action):
     return "Local\\" + namespace() + "." + action
 
 
+def ready_for_catalog_upgrade(*, interactive):
+    """Older catalogs can outlive their tray. Wait for the owner to release its event."""
+    while True:
+        handle = open_event(0x00100000, False, event_name("show"))  # SYNCHRONIZE, no signal
+        if not handle:
+            error = ctypes.get_last_error()
+            if error == 2:  # ERROR_FILE_NOT_FOUND
+                return True
+            raise ctypes.WinError(error)
+        close(handle)  # Our own handle must not keep the old owner's event alive.
+        if not interactive:
+            return False
+        answer = user.MessageBoxW(None,
+            "The GGF App Catalog is still open. Finish any download or sign-in, "
+            "close the catalog window, then choose Retry to continue installing.",
+            "Close the GGF App Catalog", 0x10045)  # Set foreground, information, Retry/Cancel
+        if answer != 4:  # IDRETRY
+            return False
+
+
 def activate_existing(welcome=False):
     handle = open_event(2, False, event_name("show"))
     if not handle:

@@ -2,7 +2,7 @@
 @echo off
 setlocal EnableExtensions DisableDelayedExpansion
 set "INSTALL_SCRIPT=%~f0"
-set "DEST=%LOCALAPPDATA%\Programs\Get Going Fast\Tray-0.16.3"
+set "DEST=%LOCALAPPDATA%\Programs\Get Going Fast\Tray-0.16.4"
 if /i "%~1"=="--from-setup" goto extracted
 if /i "%~1"=="--from-setup-quiet" goto extracted
 if /i "%~dp0"=="%DEST%\" if exist "%DEST%\GGF-Tray.exe" goto extracted
@@ -36,18 +36,22 @@ goto register
 cd /d "%DEST%" || exit /b 1
 if not exist "GGF-Tray.exe" exit /b 1
 :register
-set "MENU=%APPDATA%\Microsoft\Windows\Start Menu\Programs"
-if not exist "%MENU%\" mkdir "%MENU%"
-"%SystemRoot%\System32\cscript.exe" //nologo //E:JScript "%INSTALL_SCRIPT%" "%MENU%\Get Going Fast Tray.lnk" "%DEST%\GGF-Tray.exe"
-if errorlevel 1 echo Start menu shortcut unavailable. You can open the EXE directly.
 set "SETUP_MODE="
 if /i "%~1"=="--no-launch" set "SETUP_MODE=--setup-unattended"
 if /i "%~1"=="--from-setup-quiet" set "SETUP_MODE=--setup-unattended"
 start "" /wait "%DEST%\GGF-Tray.exe" --register-startup %SETUP_MODE%
+if "%errorlevel%"=="2" (
+  echo Close the GGF App Catalog before continuing setup.
+  exit /b 2
+)
 if errorlevel 1 (
   echo Windows startup could not be configured. See Start silently with Windows in the tray menu.
   exit /b 1
 )
+set "MENU=%APPDATA%\Microsoft\Windows\Start Menu\Programs"
+if not exist "%MENU%\" mkdir "%MENU%"
+"%SystemRoot%\System32\cscript.exe" //nologo //E:JScript "%INSTALL_SCRIPT%" "%MENU%\Get Going Fast Tray.lnk" "%DEST%\GGF-Tray.exe"
+if errorlevel 1 echo Start menu shortcut unavailable. You can open the EXE directly.
 "%SystemRoot%\System32\cscript.exe" //nologo //E:JScript "%DEST%\Uninstall GGF Tray.js" --register
 if errorlevel 1 goto failed
 if /i "%~1"=="--no-launch" exit /b 0
@@ -78,15 +82,14 @@ var shell = new ActiveXObject("WScript.Shell");
 var fso = new ActiveXObject("Scripting.FileSystemObject");
 var linkPath=WScript.Arguments(0), target=WScript.Arguments(1);
 var link=shell.CreateShortcut(linkPath);
-var oldManagedPath=fso.BuildPath(fso.GetParentFolderName(fso.GetParentFolderName(target)), "Tray-0.13.0\\GGF-Tray.exe");
-var priorManagedPath=fso.BuildPath(fso.GetParentFolderName(fso.GetParentFolderName(target)), "Tray-0.14.0\\GGF-Tray.exe");
-var lastManagedPath=fso.BuildPath(fso.GetParentFolderName(fso.GetParentFolderName(target)), "Tray-0.15.0\\GGF-Tray.exe");
-var lastPatchPath=fso.BuildPath(fso.GetParentFolderName(fso.GetParentFolderName(target)), "Tray-0.15.1\\GGF-Tray.exe");
-var lastReleasePath=fso.BuildPath(fso.GetParentFolderName(fso.GetParentFolderName(target)), "Tray-0.16.0\\GGF-Tray.exe");
-var firstSetupPath=fso.BuildPath(fso.GetParentFolderName(fso.GetParentFolderName(target)), "Tray-0.16.1\\GGF-Tray.exe");
-var welcomePatchPath=fso.BuildPath(fso.GetParentFolderName(fso.GetParentFolderName(target)), "Tray-0.16.2\\GGF-Tray.exe");
+var programsRoot=fso.GetParentFolderName(fso.GetParentFolderName(target));
+var priorVersions=["0.13.0","0.14.0","0.15.0","0.15.1","0.16.0","0.16.1","0.16.2","0.16.3"];
 var existing=String(link.TargetPath).toLowerCase();
-if (fso.FileExists(linkPath) && existing !== target.toLowerCase() && existing !== oldManagedPath.toLowerCase() && existing !== priorManagedPath.toLowerCase() && existing !== lastManagedPath.toLowerCase() && existing !== lastPatchPath.toLowerCase() && existing !== lastReleasePath.toLowerCase() && existing !== firstSetupPath.toLowerCase() && existing !== welcomePatchPath.toLowerCase()) {
+var managed=existing === target.toLowerCase();
+for (var i=0; i<priorVersions.length && !managed; i++) {
+    managed=existing === fso.BuildPath(programsRoot, "Tray-"+priorVersions[i]+"\\GGF-Tray.exe").toLowerCase();
+}
+if (fso.FileExists(linkPath) && !managed) {
     WScript.Echo("An existing shortcut was preserved."); WScript.Quit(1);
 }
 link.TargetPath=target;

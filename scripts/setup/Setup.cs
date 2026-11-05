@@ -99,7 +99,7 @@ internal static class Setup
             Mutex tray;
             if (!Mutex.TryOpenExisting(@"Global\GGF-Tray-Unique-Mutex-87A3F9B2", out tray)) return true;
             tray.Dispose();
-            if (MessageBox.Show("Right-click the GGF icon by the Windows clock and choose Quit, then click Retry.",
+            if (MessageBox.Show("Finish any download, close the GGF App Catalog, then right-click the GGF icon by the Windows clock and choose Quit. Click Retry to continue.",
                 "Quit GGF Tray before installing", MessageBoxButtons.RetryCancel, MessageBoxIcon.Information)
                 != DialogResult.Retry) return false;
         }
@@ -175,6 +175,7 @@ internal static class Setup
                 {
                     string message = process.StandardOutput.ReadToEnd();
                     process.WaitForExit();
+                    if (process.ExitCode == 2) return 2;
                     if (process.ExitCode != 0) throw new IOException("Setup could not finish. " + message.Trim());
                 }
                 if (!quiet)

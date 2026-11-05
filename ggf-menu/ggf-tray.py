@@ -1371,6 +1371,9 @@ if __name__ == "__main__":
         sys.exit(notice_main())
     elif "--register-startup" in sys.argv:
         try:
+            from ggf_catalog_window import ready_for_catalog_upgrade
+            if not ready_for_catalog_upgrade(interactive="--setup-unattended" not in sys.argv):
+                sys.exit(2)
             ggf_startup.configure("install")
         except Exception as exc:
             print(exc)
@@ -1408,7 +1411,7 @@ if __name__ == "__main__":
         except Exception as exc:
             failures.append(f"helper initialization failed: {exc}")
         with open(os.path.join(STATE_DIR, "release-diagnostics.txt"),"w",encoding="utf-8") as report:
-            report.write("; ".join(failures) if failures else "GGF Tray 0.16.3 self-test OK")
+            report.write("; ".join(failures) if failures else "GGF Tray 0.16.4 self-test OK")
         if failures:
             print("GGF Tray self-test FAILED: " + "; ".join(failures))
             sys.exit(1)
