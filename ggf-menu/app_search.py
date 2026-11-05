@@ -60,8 +60,19 @@ class SearchDialog(QWidget):
         self.stop_link=QPushButton("Cancel sign-in");self.stop_link.clicked.connect(self.cancel_link);r.addWidget(self.stop_link)
         self.link_hint.hide();self.stop_link.hide()
         r=row();self.search=QLineEdit();self.search.setPlaceholderText("Search names and descriptions");r.addWidget(self.search,1)
-        self.type=QComboBox();self.type.addItem("All categories","");r.addWidget(self.type)
         self.refresh=QPushButton("Refresh");self.refresh.clicked.connect(self.reload);r.addWidget(self.refresh)
+        r=row()
+        membership_label=QLabel("&Membership")
+        self.membership=QComboBox()
+        self.membership.setAccessibleName("Filter by membership access")
+        self.membership.setToolTip("All shows every listing. Choose a membership to see everything it includes.")
+        for title,tier in (("All",""),("Included with my membership","mine"),("Free","free"),
+                           ("Prairie Dog","prairie-dog"),("Farm Hand","farm-hand")):
+            self.membership.addItem(title,tier)
+        membership_label.setBuddy(self.membership)
+        r.addWidget(membership_label);r.addWidget(self.membership)
+        self.type=QComboBox();self.type.setAccessibleName("Category");self.type.addItem("All categories","");r.addWidget(self.type)
+        r.addStretch()
         self.results=QListWidget();box.addWidget(self.results,1);self.results.currentItemChanged.connect(self.select)
         self.details=QLabel("Select a tool.");self.details.setWordWrap(True);self.details.setTextFormat(Qt.TextFormat.PlainText);box.addWidget(self.details)
         r=row();self.page=QPushButton("Tool page");self.page.clicked.connect(self.open_page);r.addWidget(self.page)
@@ -69,7 +80,7 @@ class SearchDialog(QWidget):
         self.cancel=QPushButton("Cancel transfer");self.cancel.clicked.connect(lambda:self.jobs["transfer"].requestInterruption() if "transfer" in self.jobs else None);r.addWidget(self.cancel);self.cancel.hide()
         self.bar=QProgressBar();box.addWidget(self.bar);self.bar.hide()
         self.status=QLabel("Loading catalog…");self.status.setWordWrap(True);self.status.setTextFormat(Qt.TextFormat.PlainText);box.addWidget(self.status)
-        self.search.textChanged.connect(self.filter);self.type.currentIndexChanged.connect(self.filter);self.results.itemDoubleClicked.connect(self.open_page)
+        self.search.textChanged.connect(self.filter);self.type.currentIndexChanged.connect(self.filter);self.membership.currentIndexChanged.connect(self.filter);self.results.itemDoubleClicked.connect(self.open_page)
         self.update_auth();self.select();QTimer.singleShot(0,self.reload)
     def job(self,key,fn,done,failed=None):
         if key in self.jobs:return
@@ -87,7 +98,13 @@ class SearchDialog(QWidget):
             self.select();worker.deleteLater()
         worker.finished.connect(finish);worker.progress.connect(self.progress);worker.start()
     def update_auth(self):
+        previous_tier = getattr(self, "user", {}).get("tier")
         self.auth.load_cache();self.user=self.auth.cached_auth or {}
+        if self.membership.currentData()=="mine" and previous_tier!=self.user.get("tier"):
+            if self.user:
+                self.filter()
+            else:
+                self.membership.setCurrentIndex(0)
         self.member.setTextFormat(Qt.TextFormat.PlainText)
         if self.pending_token:
             code=hashlib.sha256(self.pending_token.encode()).hexdigest()[:8].upper()
@@ -193,20 +210,29 @@ class SearchDialog(QWidget):
             self.type.setCurrentIndex(max(0,self.type.findData(old)));self.type.blockSignals(False);self.filter()
         self.job("catalog",lambda w:catalog(get_state_dir()),loaded)
     def filter(self,*_):
+        prior=self.selected()
         self.results.clear();q=self.search.text().strip().casefold();category=self.type.currentData()
+        membership=self.membership.currentData()
+        preview_tier=self.user.get("tier") if membership=="mine" else membership
         rows=[t for t in self.tools if q in (t["name"]+" "+str(t.get("description") or "")).casefold() and
+              (not membership or (t.get("slug") and membership_allows_download(preview_tier,t.get("membership")))) and
               (not category or category in [str(t.get(k,"")).lower() for k in ("type1","type2","type3")])]
         rows.sort(key=lambda t:(str(t.get("fav","")).lower() not in ("true","1","yes","y","fav"), t["name"].casefold()))
         for t in rows:
             item=QListWidgetItem(t["name"]);item.setData(Qt.ItemDataRole.UserRole,t);self.results.addItem(item)
-        if rows:self.results.setCurrentRow(0)
+        if rows:self.results.setCurrentRow(next((i for i,t in enumerate(rows) if t==prior),0))
         if "auth" not in self.jobs and "transfer" not in self.jobs:self.status.setText(("Offline catalog • " if self.offline else "")+f"{len(rows)} of {len(self.tools)} tools")
         self.select()
     def selected(self):
         item=self.results.currentItem();return item.data(Qt.ItemDataRole.UserRole) if item else {}
     def select(self,*_):
         t=self.selected();code=t.get("membership");label={"pd":"Prairie Dog+","fh":"Farm Hand+","free":"Free members","fs":"Website purchase"}.get(code,"See tool page")
-        self.details.setText(f"{label}   •   {t['name']}\n{str(t.get('description') or '')[:280]}" if t else "Select a tool.")
+        if t:
+            self.details.setText(f"{label}   •   {t['name']}\n{str(t.get('description') or '')[:280]}")
+        elif self.membership.currentData()=="mine" and not self.user:
+            self.details.setText("Sign in to see what your membership includes, or choose All to browse.")
+        else:
+            self.details.setText("No matching tools. Try another membership, category, or search." if self.tools else "Select a tool.")
         self.page.setEnabled(bool(t.get("url")));self.get.setEnabled(bool(self.user and not self.pending_token and t.get("slug") and membership_allows_download(self.user.get("tier"),code) and "transfer" not in self.jobs and "auth" not in self.jobs))
     def open_page(self,*_):
         url=urljoin(ORIGIN+"/",self.selected().get("url") or "")

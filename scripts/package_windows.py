@@ -1,6 +1,7 @@
 """Package and install-test the official Windows tray."""
 import argparse
 import hashlib
+import json
 from importlib import metadata
 import os
 from pathlib import Path
@@ -9,6 +10,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import uuid
+import winreg
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -16,6 +19,7 @@ APP = ROOT / "ggf-menu"
 PORTABLE = "GGF-Tray-OneFile.exe"
 BUNDLE = "GGF-Tray-Windows-x64.zip"
 SETUP = "GGF-Tray-Setup.exe"
+UNINSTALL = "Uninstall GGF Tray.js"
 
 
 def file_hash(path):
@@ -48,7 +52,8 @@ def smoke_install(bundle, setup, work, version, expected_hash):
     local = work / "Local"
     roaming = work / "Roaming"
     system = Path(os.environ["SystemRoot"])
-    env = dict(os.environ, LOCALAPPDATA=str(local), APPDATA=str(roaming),
+    test_id = uuid.uuid4().hex
+    env = dict(os.environ, LOCALAPPDATA=str(local), APPDATA=str(roaming), GGF_TRAY_INSTALL_TEST_ID=test_id,
                PATH=os.pathsep.join(map(str, [system / "System32", system])))
     cmd = system / "System32/cmd.exe"
     # Make the self-extractor perform the first install on an empty profile.
@@ -65,6 +70,13 @@ def smoke_install(bundle, setup, work, version, expected_hash):
                    env=env, check=True, timeout=180)
     if file_hash(installed) != expected_hash:
         raise ValueError("Installed executable differs from the release asset")
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, rf"Software\GetGoingFast\InstallerTests\{test_id}") as registration:
+        uninstall_command = winreg.QueryValueEx(registration, "UninstallString")[0]
+        if (winreg.QueryValueEx(registration, "DisplayVersion")[0] != version
+                or not uninstall_command.endswith(f'//E:JScript "{installed.parent / UNINSTALL}"')
+                or not (installed.parent / UNINSTALL).is_file()):
+            raise ValueError("Windows uninstall registration does not point to the installed version")
+    winreg.DeleteKey(winreg.HKEY_CURRENT_USER, rf"Software\GetGoingFast\InstallerTests\{test_id}")
     subprocess.run([str(installed), "--self-test"], cwd=installed.parent, env=env, check=True, timeout=180)
     diagnostics = (local / "GGF-Tray/release-diagnostics.txt").read_text()
     if diagnostics != f"GGF Tray {version} self-test OK":
@@ -90,17 +102,26 @@ def main():
     exe = out / PORTABLE
     shutil.copyfile(args.exe, exe)
     bundle = out / BUNDLE
+    base = Path(sys.base_prefix)
+    boot = metadata.distribution("pyinstaller")
+    terms = next(f for f in boot.files if f.name == "COPYING.txt")
+    members = [
+        (exe, "ggf-menu/GGF-Tray.exe"),  # Check for a running/locked EXE first on uninstall.
+        (ROOT / "install-ggf-menu.bat", "Install GGF Tray.bat"),
+        (ROOT / "LICENSE.txt", "LICENSE.txt"),
+        (APP / "MEMBER-GUIDE.txt", "START HERE.txt"),
+        (base / "LICENSE.txt", "notices/Python-LICENSE.txt"),
+        (base / "tcl/tk8.6/license.terms", "notices/Tk-license.terms"),
+        (boot.locate_file(terms), "notices/PyInstaller-COPYING.txt"),
+    ]
+    inventory = [[name.removeprefix("ggf-menu/").replace("/", "\\"), file_hash(path)]
+                 for path, name in members]
     with zipfile.ZipFile(bundle, "x", zipfile.ZIP_DEFLATED) as archive:
-        archive.write(ROOT / "install-ggf-menu.bat", "Install GGF Tray.bat")
-        archive.write(ROOT / "LICENSE.txt", "LICENSE.txt")
-        archive.write(APP / "MEMBER-GUIDE.txt", "START HERE.txt")
-        archive.write(exe, "ggf-menu/GGF-Tray.exe")
-        base = Path(sys.base_prefix)
-        archive.write(base / "LICENSE.txt", "notices/Python-LICENSE.txt")
-        archive.write(base / "tcl/tk8.6/license.terms", "notices/Tk-license.terms")
-        boot = metadata.distribution("pyinstaller")
-        terms = next(f for f in boot.files if f.name == "COPYING.txt")
-        archive.write(boot.locate_file(terms), "notices/PyInstaller-COPYING.txt")
+        for path, name in members:
+            archive.write(path, name)
+        source = (ROOT / "scripts/setup/uninstall.js.in").read_text(encoding="utf-8")
+        archive.writestr("ggf-menu/" + UNINSTALL, source.replace("@@VERSION@@", version)
+                         .replace("@@FILES@@", json.dumps(inventory)).encode("ascii"))
     exe_hash = file_hash(exe)
     setup = out / SETUP
     build_setup(bundle, setup, work, version)

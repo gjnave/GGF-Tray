@@ -2,7 +2,7 @@
 @echo off
 setlocal EnableExtensions DisableDelayedExpansion
 set "INSTALL_SCRIPT=%~f0"
-set "DEST=%LOCALAPPDATA%\Programs\Get Going Fast\Tray-0.16.2"
+set "DEST=%LOCALAPPDATA%\Programs\Get Going Fast\Tray-0.16.3"
 if /i "%~1"=="--from-setup" goto extracted
 if /i "%~1"=="--from-setup-quiet" goto extracted
 if /i "%~dp0"=="%DEST%\" if exist "%DEST%\GGF-Tray.exe" goto extracted
@@ -21,7 +21,11 @@ python -m venv venv || goto failed
 start "" /d "%cd%" "%cd%\venv\Scripts\pythonw.exe" "%cd%\ggf-tray.py"
 exit /b 0
 :packaged
+if not exist "Uninstall GGF Tray.js" goto missing
 if not exist "%DEST%\" mkdir "%DEST%" || goto failed
+if not exist "%DEST%\Uninstall GGF Tray.js" copy /b /-y "Uninstall GGF Tray.js" "%DEST%\Uninstall GGF Tray.js" <nul >nul
+"%SystemRoot%\System32\fc.exe" /b "Uninstall GGF Tray.js" "%DEST%\Uninstall GGF Tray.js" >nul
+if errorlevel 1 goto mismatch
 if exist "%DEST%\GGF-Tray.exe" goto existing
 copy /b /-y "GGF-Tray.exe" "%DEST%\GGF-Tray.exe" <nul >nul || goto failed
 :existing
@@ -44,6 +48,8 @@ if errorlevel 1 (
   echo Windows startup could not be configured. See Start silently with Windows in the tray menu.
   exit /b 1
 )
+"%SystemRoot%\System32\cscript.exe" //nologo //E:JScript "%DEST%\Uninstall GGF Tray.js" --register
+if errorlevel 1 goto failed
 if /i "%~1"=="--no-launch" exit /b 0
 if /i "%~1"=="--from-setup" exit /b 0
 if /i "%~1"=="--from-setup-quiet" exit /b 0
@@ -52,7 +58,7 @@ echo Starting GGF Tray. Look in the notification area by the clock.
 start "" /d "%DEST%" "%DEST%\GGF-Tray.exe"
 exit /b 0
 :mismatch
-echo A different EXE is already in "%DEST%". No existing program was replaced.
+echo A different file is already in "%DEST%". No existing program was replaced.
 echo You can run the included ggf-menu\GGF-Tray.exe directly.
 goto setupError
 :missing
@@ -78,8 +84,9 @@ var lastManagedPath=fso.BuildPath(fso.GetParentFolderName(fso.GetParentFolderNam
 var lastPatchPath=fso.BuildPath(fso.GetParentFolderName(fso.GetParentFolderName(target)), "Tray-0.15.1\\GGF-Tray.exe");
 var lastReleasePath=fso.BuildPath(fso.GetParentFolderName(fso.GetParentFolderName(target)), "Tray-0.16.0\\GGF-Tray.exe");
 var firstSetupPath=fso.BuildPath(fso.GetParentFolderName(fso.GetParentFolderName(target)), "Tray-0.16.1\\GGF-Tray.exe");
+var welcomePatchPath=fso.BuildPath(fso.GetParentFolderName(fso.GetParentFolderName(target)), "Tray-0.16.2\\GGF-Tray.exe");
 var existing=String(link.TargetPath).toLowerCase();
-if (fso.FileExists(linkPath) && existing !== target.toLowerCase() && existing !== oldManagedPath.toLowerCase() && existing !== priorManagedPath.toLowerCase() && existing !== lastManagedPath.toLowerCase() && existing !== lastPatchPath.toLowerCase() && existing !== lastReleasePath.toLowerCase() && existing !== firstSetupPath.toLowerCase()) {
+if (fso.FileExists(linkPath) && existing !== target.toLowerCase() && existing !== oldManagedPath.toLowerCase() && existing !== priorManagedPath.toLowerCase() && existing !== lastManagedPath.toLowerCase() && existing !== lastPatchPath.toLowerCase() && existing !== lastReleasePath.toLowerCase() && existing !== firstSetupPath.toLowerCase() && existing !== welcomePatchPath.toLowerCase()) {
     WScript.Echo("An existing shortcut was preserved."); WScript.Quit(1);
 }
 link.TargetPath=target;

@@ -1,4 +1,4 @@
-GET GOING FAST • WINDOWS TRAY 0.16.2
+GET GOING FAST • WINDOWS TRAY 0.16.3
 
 1. Double-click "GGF-Tray-Setup.exe" and choose "Install GGF Tray".
    Setup extracts the files, installs the tray and opens it when ready.
@@ -28,7 +28,10 @@ Windows sign-in starts the tray silently by default. Look for the turquoise G
 
 2. Open "Browse App Catalog" from the GGF icon in the notification area by
    the clock (it may be under the up arrow). Search by name or description,
-   filter by category, or choose "Tool page" for details and web purchases.
+   or filter by category. Membership starts on "All" so everyone sees every
+   listing. "Included with my membership" shows tools your account can download.
+   Choose a named tier to preview everything it includes, including lower tiers.
+   "Tool page" opens details and web purchases.
    You can browse without signing in. An offline catalog is read-only.
 
 3. Choose "Sign in", complete your GGF website login, compare the two link
@@ -72,13 +75,25 @@ Windows sign-in starts the tray silently by default. Look for the turquoise G
    and higher can open the website search with an optional query. Use the same
    member account in your browser to open source links.
 
+Uninstalling GGF Tray
+   To disconnect this PC from your membership, sign out in the catalog first.
+   Close the catalog and choose Quit from the tray menu.
+   With Setup or the manual ZIP installer, open Windows Settings > Apps >
+   Installed apps, find Get Going Fast Tray, and choose Uninstall.
+   If you run the standalone EXE, first uncheck "Start silently with Windows"
+   in its tray menu, quit, then move the downloaded EXE to the Recycle Bin.
+   Your catalog apps and downloads are kept. The runtime is shared across
+   tray versions. After removing your last copy, you can reclaim that space
+   by moving %LOCALAPPDATA%\GGF-Tray\components to the Recycle Bin.
+   Keep the rest of %LOCALAPPDATA%\GGF-Tray to retain your library list and settings.
+
 Troubleshooting:
 - Expired link or membership changed: refresh the catalog window or sign in
   again. Website purchases use the tool page.
 - Setup interrupted: the original download is retained. Any partially prepared
   folder stays available for inspection; choose a new folder on the next try.
 - Library, shortcuts and settings live under %LOCALAPPDATA%\GGF-Tray.
-  Setup installs to %LOCALAPPDATA%\Programs\Get Going Fast\Tray-0.16.2.
+  Setup installs to %LOCALAPPDATA%\Programs\Get Going Fast\Tray-0.16.3.
   The standalone EXE runs from whichever folder you put it in.
 - Supported target: Windows x64. Tested on Windows 11. No signing certificate
   is embedded in this release. If Windows shows a publisher warning, compare

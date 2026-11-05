@@ -6,6 +6,8 @@ Browse the GGF app catalog, install tools your membership includes, and launch t
 
 The download page shows the recommended installer, its release date, and earlier versions.
 
+Everyone can browse the full catalog. Choose **Included with my membership** to see the tools your linked account can download. **Free**, **Prairie Dog**, and **Farm Hand** preview what each tier includes. Choose **All** to see every listing again. You can combine these filters with a category and search text.
+
 Quit any running GGF Tray, double-click **GGF-Tray-Setup.exe**, and choose **Install GGF Tray**. Setup extracts the files, installs for your Windows account, and opens the tray. Right-click the turquoise G by the clock to open the catalog or change **Start silently with Windows**.
 
 Setup shows the install folder before you start. On the first launch, a small card near the clock lets you open the catalog or the app folder. To find the folder again, right-click the G and choose **Open GGF Tray folder**. The standalone EXE runs from the folder where you saved it.
@@ -13,6 +15,8 @@ Setup shows the install folder before you start. On the first launch, a small ca
 The first installation downloads about 288 MiB of Windows components from their publishers on PyPI. Setup verifies each download and stores the libraries under your Windows account. Subsequent launches use the installed copies. The standalone EXE uses the same components.
 
 GGF licenses its original code and artwork for end-user operation of the official, unmodified release. Each third-party component retains its own license and can be replaced independently. [Read the GGF end-user license](LICENSE.txt).
+
+To uninstall a Setup or ZIP installation from version 0.16.3 onward, sign out in the catalog if you want to disconnect this PC, quit GGF Tray, then go to **Settings > Apps > Installed apps > Get Going Fast Tray > Uninstall**. For the standalone EXE, turn off **Start silently with Windows**, quit, and move the EXE to the Recycle Bin. Your catalog apps and downloads are kept. After your last tray copy is gone, you can also recycle `%LOCALAPPDATA%\GGF-Tray\components` to reclaim the shared runtime space.
 
 To link your membership, click **Sign in** in the catalog. Sign in on the website, match the code, and choose **Link Desktop App**. If you land on the member homepage, **Continue in browser** reopens the matching confirmation page.
 

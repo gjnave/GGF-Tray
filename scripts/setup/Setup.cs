@@ -20,6 +20,7 @@ internal static class Setup
     static readonly Dictionary<string, string> Files = new Dictionary<string, string> {
         {"Install GGF Tray.bat", "Install GGF Tray.bat"},
         {"ggf-menu/GGF-Tray.exe", "GGF-Tray.exe"},
+        {"ggf-menu/Uninstall GGF Tray.js", "Uninstall GGF Tray.js"},
         {"LICENSE.txt", "LICENSE.txt"},
         {"START HERE.txt", "START HERE.txt"},
         {"notices/Python-LICENSE.txt", @"notices\Python-LICENSE.txt"},

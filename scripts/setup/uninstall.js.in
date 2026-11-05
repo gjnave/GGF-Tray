@@ -1,0 +1,106 @@
+// Windows Script Host. The packager supplies fixed filenames and their release hashes.
+// Only Settings and the installed copy of this script are uninstall entry points.
+var version = "@@VERSION@@";
+var files = @@FILES@@;
+var fs = new ActiveXObject("Scripting.FileSystemObject");
+var shell = new ActiveXObject("WScript.Shell");
+var env = shell.Environment("Process");
+var join = function (parent, name) { return fs.BuildPath(parent, name); };
+var local = env("LOCALAPPDATA"), roaming = env("APPDATA");
+var folder = join(join(join(local, "Programs"), "Get Going Fast"), "Tray-" + version);
+var target = join(folder, "GGF-Tray.exe");
+var script = join(folder, "Uninstall GGF Tray.js");
+var sys = join(fs.GetSpecialFolder(0).Path, "System32");
+var command = '"' + join(sys, "wscript.exe") + '" //E:JScript "' + script + '"';
+var key = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\GetGoingFast.Tray." + version + "\\";
+// Package tests run under a disposable profile with a separate registry entry.
+var testID = env("GGF_TRAY_INSTALL_TEST_ID");
+if (/^[a-f0-9]{32}$/.test(testID)) key = "HKCU\\Software\\GetGoingFast\\InstallerTests\\" + testID + "\\";
+
+function quoted(path) { return '"' + path + '"'; }
+function same(a,b) {
+    if (fs.GetAbsolutePathName(a).toLowerCase() === fs.GetAbsolutePathName(b).toLowerCase()) return true;
+    if (!fs.FileExists(a) || !fs.FileExists(b)) return false;
+    var shortPath = fs.GetFile(a).ShortPath;
+    return !!shortPath && shortPath.toLowerCase() === fs.GetFile(b).ShortPath.toLowerCase();
+}
+function checkPath(path, base) {
+    // Inspect ancestors before inspecting any leaf. Do not traverse junctions.
+    if (!same(path, base)) {
+        var parent = fs.GetParentFolderName(path);
+        if (!parent || parent === path) throw Error("Unexpected path: " + path);
+        checkPath(parent, base);
+    }
+    var entry = fs.FolderExists(path) ? fs.GetFolder(path) : fs.FileExists(path) ? fs.GetFile(path) : null;
+    if (entry && (entry.Attributes & 1024)) throw Error("Linked path was left in place: " + path);
+}
+function registered() {
+    try { return shell.RegRead(key + "UninstallString"); }
+    catch (e) { if ((e.number & 65535) !== 2) throw e; return ""; }
+}
+function register() {
+    var values = {DisplayName:"Get Going Fast Tray", DisplayVersion:version, Publisher:"Get Going Fast",
+        InstallLocation:folder, DisplayIcon:quoted(target) + ",0", UninstallString:command};
+    for (var name in values) shell.RegWrite(key + name, values[name], "REG_SZ");
+    shell.RegWrite(key + "NoModify", 1, "REG_DWORD");
+    shell.RegWrite(key + "NoRepair", 1, "REG_DWORD");
+}
+function hash(path) {
+    var p = shell.Exec(quoted(join(sys, "certutil.exe")) + " -hashfile " + quoted(path) + " SHA256");
+    var text = p.StdOut.ReadAll();
+    while (p.Status === 0) WScript.Sleep(10);
+    var match = /^\s*([0-9a-f]{64})\s*$/im.exec(text);
+    if (p.ExitCode || !match) throw Error("Could not verify " + path);
+    return match[1].toLowerCase();
+}
+function removeFile(path) { fs.DeleteFile(path, false); }
+function emptyDir(path) {
+    // rmdir without /s atomically refuses non-empty directories. Never recurse.
+    if (fs.FolderExists(path)) {
+        env("GGF_TRAY_EMPTY_FOLDER") = path;
+        shell.Run(quoted(join(sys, "cmd.exe")) + ' /d /v:on /c rmdir "!GGF_TRAY_EMPTY_FOLDER!"', 0, true);
+    }
+}
+function uninstall() {
+    var message = "Uninstall Get Going Fast Tray " + version + " for this Windows account?\n\n" +
+        "To disconnect this PC from your membership, sign out in the catalog first. Quit the tray and close its windows.\n\n" +
+        "This removes this version and its Start and Startup shortcuts. Your catalog apps, downloads, preferences and shared runtime stay on this PC.";
+    if (shell.Popup(message, 0, "Uninstall GGF Tray", 4 + 32 + 256) !== 6) return;
+    var remove = [], kept = [];
+    for (var i = 0; i < files.length; i++) {
+        var path = join(folder, files[i][0]);
+        checkPath(path, local);
+        if (!fs.FileExists(path)) continue;
+        if (hash(path) === files[i][1]) remove.push(path);
+        else kept.push(files[i][0]);
+    }
+    var programs = join(roaming, "Microsoft\\Windows\\Start Menu\\Programs");
+    var links = [join(programs, "Get Going Fast Tray.lnk"), join(programs, "Startup\\GGF Tray.lnk")];
+    for (var j = 0; j < links.length; j++) {
+        checkPath(links[j], roaming);
+        if (fs.FileExists(links[j]) && same(shell.CreateShortcut(links[j]).TargetPath, target)) remove.push(links[j]);
+    }
+    // The program is first. If Windows has it locked the registration remains available for retry.
+    for (var k = 0; k < remove.length; k++) removeFile(remove[k]);
+    if (registered()) shell.RegDelete(key);
+    removeFile(script);
+    emptyDir(join(folder,"notices"));
+    emptyDir(folder);
+    shell.Popup("GGF Tray " + version + " was uninstalled." +
+        (kept.length ? "\n\nModified files kept in the app folder: " + kept.join(", ") : ""),
+        0, "Get Going Fast Tray", 64);
+}
+try {
+    checkPath(script, local);
+    if (!same(WScript.ScriptFullName, script)) throw Error("Run the uninstaller from the installed GGF Tray folder.");
+    var previous = registered();
+    if (previous && previous.toLowerCase() !== command.toLowerCase()) throw Error("A different uninstall entry already exists.");
+    if (WScript.Arguments.length === 1 && WScript.Arguments(0) === "--register") register();
+    else if (WScript.Arguments.length === 0) uninstall();
+    else WScript.Quit(2);
+} catch (error) {
+    var detail = "GGF Tray could not finish. Quit the tray and any open GGF windows, then try again.\n\n" + error.message;
+    if (/cscript\.exe$/i.test(WScript.FullName)) WScript.Echo(detail);
+    else shell.Popup(detail, 0, "Get Going Fast Tray", 16);
+    WScript.Quit(1);
+}

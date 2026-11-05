@@ -39,6 +39,61 @@ class SigninTests(unittest.TestCase):
     def approved(token):
         return dict(name="QA", tier="prairie-dog", expires=int(time.time())+3600, token=token)
 
+    def test_browsing_and_tier_previews_never_grant_download_access(self):
+        ui = self.ui
+        tools = [dict(name=name, membership=code, type1=kind, slug=name.lower())
+                 for name,code,kind in (("Basic","free","audio"),("Voice","pd","audio"),
+                                        ("Studio","fh","video"),("Shop","fs","video"))]
+        def visible():
+            return {ui.results.item(i).text() for i in range(ui.results.count())}
+        def choose(tier):
+            ui.membership.setCurrentIndex(ui.membership.findData(tier))
+        with patch("app_search.catalog", return_value=(tools,False)):
+            ui.refresh.click();self.idle()
+            everyone={"Basic","Voice","Studio","Shop"}
+            self.assertEqual(visible(),everyone)
+            choose("farm-hand")
+            self.assertEqual(visible(),{"Basic","Voice","Studio"})
+            self.assertFalse(ui.get.isEnabled())
+            choose("mine")
+            self.assertFalse(visible())
+            self.assertIn("Sign in",ui.details.text())
+            user=self.approved(ui.auth.generate_token())
+            with patch.object(ui.auth,"load_cache"), patch.object(ui.auth,"cached_auth",dict(user,tier="free")):
+                ui.update_auth()
+                self.assertEqual(visible(),{"Basic"})
+                choose("")
+                self.assertEqual(visible(),everyone)
+                choose("farm-hand")
+                ui.search.setText("Studio")
+                self.assertEqual(visible(),{"Studio"})
+                self.assertFalse(ui.get.isEnabled())
+                with patch.object(ui,"job") as submit:
+                    ui.download()
+                    submit.assert_not_called()
+                ui.search.clear()
+                choose("mine")
+                ui.auth.cached_auth=user
+                ui.update_auth()
+                self.assertEqual(visible(),{"Basic","Voice"})
+                ui.auth.cached_auth=dict(user,tier="farm-hand")
+                ui.update_auth()
+                self.assertEqual(visible(),{"Basic","Voice","Studio"})
+                ui.type.setCurrentIndex(ui.type.findData("video"))
+                ui.search.setText("Studio")
+                with patch.object(ui.auth,"verify_link",return_value=ui.auth.cached_auth), patch.object(ui.auth,"save_cache"):
+                    ui.refresh.click();self.idle()
+                self.assertEqual(visible(),{"Studio"})
+                self.assertTrue(ui.get.isEnabled())
+                ui.auth.cached_auth=None
+                ui.update_auth()
+                self.assertEqual(ui.membership.currentData(),"")
+                self.assertFalse(ui.get.isEnabled())
+            ui.search.clear()
+            ui.type.setCurrentIndex(0)
+            choose("prairie-dog"); self.assertEqual(visible(),{"Basic","Voice"})
+            choose("free"); self.assertEqual(visible(),{"Basic"})
+
     def test_signed_out_browser_resume_and_refresh_after_explicit_approval(self):
         ui = self.ui
         with patch("webbrowser.open", return_value=True) as browser, patch.object(ui.auth, "verify_link", return_value=None) as verify:
