@@ -78,3 +78,14 @@ ggf-menu/auth_cache.dat
 /release/GGF-Tray-0.14.0/
 /release/GGF-Tray-0.15.0/
 /release/GGF-Tray-0.15.1/
+/release/GGF-Tray-0.16.0/
+/release/local-build-*/
+/desktop-server/
+/desktop-tests/
+/ggf-menu/_BACKUPS/
+/ggf-menu/build_onefile_next/
+/ggf-menu/dist_onefile_next/
+/public-assets/
+app_search_log.txt
+auth_desktop_v2.dat
+app_tokens.json
