@@ -16,7 +16,7 @@ The first installation downloads about 288 MiB of Windows components from their 
 
 GGF licenses its original code and artwork for end-user operation of the official, unmodified release. Each third-party component retains its own license and can be replaced independently. [Read the GGF end-user license](LICENSE.txt).
 
-To uninstall a Setup or ZIP installation from version 0.16.3 onward, sign out in the catalog if you want to disconnect this PC, quit GGF Tray, then go to **Settings > Apps > Installed apps > Get Going Fast Tray > Uninstall**. For the standalone EXE, turn off **Start silently with Windows**, quit, and move the EXE to the Recycle Bin. Your catalog apps and downloads are kept. After your last tray copy is gone, you can also recycle `%LOCALAPPDATA%\GGF-Tray\components` to reclaim the shared runtime space.
+To uninstall a Setup or ZIP installation of GGF Tray, sign out in the catalog if you want to disconnect this PC, quit GGF Tray, then go to **Settings > Apps > Installed apps > Get Going Fast Tray > Uninstall**. For the standalone EXE, turn off **Start silently with Windows**, quit, and move the EXE to the Recycle Bin. Your catalog apps and downloads are kept. After your last tray copy is gone, you can also recycle `%LOCALAPPDATA%\GGF-Tray\components` to reclaim the shared runtime space.
 
 To link your membership, click **Sign in** in the catalog. Sign in on the website, match the code, and choose **Link Desktop App**. If you land on the member homepage, **Continue in browser** reopens the matching confirmation page.
 
@@ -39,4 +39,4 @@ To create the public downloads locally, return to the repository root. Pass the 
 ggf-menu\build-venv\Scripts\python.exe scripts\package_windows.py "PATH-TO-BUILT-EXE" "release\public-assets"
 ```
 
-Pushes to main run the Windows tests, build Setup, install it in a fresh profile, check the manual ZIP installer, and run the installed app's self-test. To publish, tag the intended commit with the matching app version (for example, `v0.16.2`). The release workflow attaches Setup, the manual ZIP, the standalone EXE, and their checksums to GitHub Releases.
+Pushes to main run the Windows tests, build Setup, install it in a fresh profile, check the manual ZIP installer, and run the installed app's self-test. To publish, tag the intended commit with the matching app version (for example, `v1.0.0`). The release workflow attaches Setup, the manual ZIP, the standalone EXE, and their checksums to GitHub Releases.

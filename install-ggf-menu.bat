@@ -2,7 +2,7 @@
 @echo off
 setlocal EnableExtensions DisableDelayedExpansion
 set "INSTALL_SCRIPT=%~f0"
-set "DEST=%LOCALAPPDATA%\Programs\Get Going Fast\Tray-0.16.4"
+set "DEST=%LOCALAPPDATA%\Programs\Get Going Fast\Tray-1.0.0"
 if /i "%~1"=="--from-setup" goto extracted
 if /i "%~1"=="--from-setup-quiet" goto extracted
 if /i "%~dp0"=="%DEST%\" if exist "%DEST%\GGF-Tray.exe" goto extracted
@@ -83,7 +83,7 @@ var fso = new ActiveXObject("Scripting.FileSystemObject");
 var linkPath=WScript.Arguments(0), target=WScript.Arguments(1);
 var link=shell.CreateShortcut(linkPath);
 var programsRoot=fso.GetParentFolderName(fso.GetParentFolderName(target));
-var priorVersions=["0.13.0","0.14.0","0.15.0","0.15.1","0.16.0","0.16.1","0.16.2","0.16.3"];
+var priorVersions=["0.13.0","0.14.0","0.15.0","0.15.1","0.16.0","0.16.1","0.16.2","0.16.3","0.16.4"];
 var existing=String(link.TargetPath).toLowerCase();
 var managed=existing === target.toLowerCase();
 for (var i=0; i<priorVersions.length && !managed; i++) {

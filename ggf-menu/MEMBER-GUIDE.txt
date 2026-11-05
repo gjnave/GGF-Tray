@@ -1,4 +1,4 @@
-GET GOING FAST • WINDOWS TRAY 0.16.4
+GET GOING FAST • WINDOWS TRAY 1.0.0
 
 1. Double-click "GGF-Tray-Setup.exe" and choose "Install GGF Tray".
    Setup extracts the files, installs the tray and opens it when ready.
@@ -6,7 +6,7 @@ GET GOING FAST • WINDOWS TRAY 0.16.4
    No Python installation or administrator account is required for the tray.
    The installer creates a Start menu entry named "Get Going Fast Tray".
    You can also run ggf-menu\GGF-Tray.exe directly from the extracted folder.
-   If a previous tray is running, quit that tray using its menu first.
+   For an upgrade, finish any download, close the catalog and quit the tray first.
 
    First setup downloads about 288 MiB from the components' publishers on
    PyPI. An internet connection is needed once. A later launch uses the
@@ -93,7 +93,7 @@ Troubleshooting:
 - Setup interrupted: the original download is retained. Any partially prepared
   folder stays available for inspection; choose a new folder on the next try.
 - Library, shortcuts and settings live under %LOCALAPPDATA%\GGF-Tray.
-  Setup installs to %LOCALAPPDATA%\Programs\Get Going Fast\Tray-0.16.4.
+  Setup installs to %LOCALAPPDATA%\Programs\Get Going Fast\Tray-1.0.0.
   The standalone EXE runs from whichever folder you put it in.
 - Supported target: Windows x64. Tested on Windows 11. No signing certificate
   is embedded in this release. If Windows shows a publisher warning, compare
