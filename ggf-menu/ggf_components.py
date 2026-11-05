@@ -69,7 +69,7 @@ def _install(base, target, rows, update):
                     raise ValueError("The component did not match its published SHA-256")
                 os.rename(partial, wheel)
             done += row["size"]
-        stage = Path(tempfile.mkdtemp(prefix="setup-", dir=base))
+        stage = Path(tempfile.mkdtemp(prefix="setup-", dir=base)).resolve()
         for row in rows:
             wheel = cache / row["file"]
             update("Installing " + row["name"], 1.0)

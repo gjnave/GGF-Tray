@@ -48,7 +48,8 @@ class UtilitiesTests(unittest.TestCase):
                 self.assertIn(artifact.revision,opener.call_args.args[0].full_url)
             self.assertEqual(final.read_bytes(),data)
             with patch("ggf_hub.urlopen_with_ssl",side_effect=AssertionError("unexpected transfer")):
-                self.assertEqual(download(artifact,folder,stop,lambda *_:None),[final])
+                cached, = download(artifact,folder,stop,lambda *_:None)
+                self.assertTrue(cached.samefile(final))
                 final.write_bytes(b"unrelated existing weights")
                 with self.assertRaises(FileExistsError):
                     download(artifact,folder,stop,lambda *_:None)
