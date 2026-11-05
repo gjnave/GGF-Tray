@@ -2,17 +2,18 @@
 
 **@@TAG@@ · @@DATE@@ · Windows x64**
 
-### [Download the installer ZIP](https://github.com/gjnave/GGF-Tray/releases/download/@@TAG@@/GGF-Tray-Windows-x64.zip)
+### [Download GGF Tray Setup for Windows](https://github.com/gjnave/GGF-Tray/releases/download/@@TAG@@/GGF-Tray-Setup.exe)
 
-**Recommended for most people.** The installer adds GGF Tray to the Windows Start menu and sets it to start silently when you sign in.
+**Recommended for most people.** This self-extracting installer adds GGF Tray to your Start menu. The tray starts silently with Windows by default and remembers your startup preference on upgrades.
 
 1. Quit GGF Tray if an older version is running.
-2. Extract the ZIP and double-click **Install GGF Tray.bat**. First setup downloads about 288 MiB of components.
+2. Double-click **GGF-Tray-Setup.exe** and choose **Install GGF Tray**. It extracts the files, installs, and opens the app. First setup downloads about 288 MiB of components.
 3. Right-click the turquoise **G** near the Windows clock and choose **Browse App Catalog**.
 
 | Other files | When to choose them |
 | --- | --- |
+| [Manual ZIP](https://github.com/gjnave/GGF-Tray/releases/download/@@TAG@@/GGF-Tray-Windows-x64.zip) | Extract the archive yourself and run **Install GGF Tray.bat**. |
 | [Standalone EXE](https://github.com/gjnave/GGF-Tray/releases/download/@@TAG@@/GGF-Tray-OneFile.exe) | Run GGF Tray directly. It uses the same first-time setup. |
-| [SHA-256 checksums](https://github.com/gjnave/GGF-Tray/releases/download/@@TAG@@/SHA256SUMS.txt) | Verify a downloaded ZIP or EXE. |
+| [SHA-256 checksums](https://github.com/gjnave/GGF-Tray/releases/download/@@TAG@@/SHA256SUMS.txt) | Verify the installer, manual ZIP, or standalone EXE. |
 
 [Compare versions and release dates](https://gjnave.github.io/GGF-Tray/#versions) · [Read the license](https://github.com/gjnave/GGF-Tray/blob/@@TAG@@/LICENSE.txt)

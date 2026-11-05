@@ -10,3 +10,4 @@ table{border-collapse:collapse;width:100%;margin-top:22px;text-align:left}th,td{
 @media(max-width:720px){.hero{grid-template-columns:1fr .65fr;padding:28px}.hero figure{align-self:center}.hero figcaption{display:none}.guide{grid-template-columns:1fr;gap:24px}.guide .aside{max-width:none}}
 @media(max-width:550px){header{padding:15px 0 18px}.brand{font-size:18px;gap:7px}.brand img{width:29px;height:29px}nav{gap:15px}nav .repo{display:none}.hero{display:block;padding:28px 22px}.hero-copy{position:relative}.hero figure{display:none}.intro{max-width:360px}.download{width:100%}.alternatives{display:block}.alternatives div{margin-top:3px}.steps li{gap:12px}th,td{padding:12px 4px}tbody th{font-size:15px}.latest{display:block;width:max-content;margin:2px 0 0}.history td{font-size:13px}footer div{gap:12px}}
 @media(max-width:350px){.wrap{padding:0 12px}.hero{padding:22px 16px}.brand{font-size:16px}nav{gap:10px}}
+.alternatives div{flex-wrap:wrap;gap:5px 12px}

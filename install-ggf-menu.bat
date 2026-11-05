@@ -2,6 +2,10 @@
 @echo off
 setlocal EnableExtensions DisableDelayedExpansion
 set "INSTALL_SCRIPT=%~f0"
+set "DEST=%LOCALAPPDATA%\Programs\Get Going Fast\Tray-0.16.1"
+if /i "%~1"=="--from-setup" goto extracted
+if /i "%~1"=="--from-setup-quiet" goto extracted
+if /i "%~dp0"=="%DEST%\" if exist "%DEST%\GGF-Tray.exe" goto extracted
 cd /d "%~dp0ggf-menu" || exit /b 1
 if exist "GGF-Tray.exe" goto packaged
 if not exist "requirements.txt" goto missing
@@ -17,25 +21,32 @@ python -m venv venv || goto failed
 start "" /d "%cd%" "%cd%\venv\Scripts\pythonw.exe" "%cd%\ggf-tray.py"
 exit /b 0
 :packaged
-set "DEST=%LOCALAPPDATA%\Programs\Get Going Fast\Tray-0.16.0"
 if not exist "%DEST%\" mkdir "%DEST%" || goto failed
 if exist "%DEST%\GGF-Tray.exe" goto existing
 copy /b /-y "GGF-Tray.exe" "%DEST%\GGF-Tray.exe" <nul >nul || goto failed
 :existing
-fc /b "GGF-Tray.exe" "%DEST%\GGF-Tray.exe" >nul
+"%SystemRoot%\System32\fc.exe" /b "GGF-Tray.exe" "%DEST%\GGF-Tray.exe" >nul
 if errorlevel 1 goto mismatch
+goto register
+:extracted
+cd /d "%DEST%" || exit /b 1
+if not exist "GGF-Tray.exe" exit /b 1
+:register
 set "MENU=%APPDATA%\Microsoft\Windows\Start Menu\Programs"
 if not exist "%MENU%\" mkdir "%MENU%"
-cscript.exe //nologo //E:JScript "%INSTALL_SCRIPT%" "%MENU%\Get Going Fast Tray.lnk" "%DEST%\GGF-Tray.exe"
+"%SystemRoot%\System32\cscript.exe" //nologo //E:JScript "%INSTALL_SCRIPT%" "%MENU%\Get Going Fast Tray.lnk" "%DEST%\GGF-Tray.exe"
 if errorlevel 1 echo Start menu shortcut unavailable. You can open the EXE directly.
 set "SETUP_MODE="
 if /i "%~1"=="--no-launch" set "SETUP_MODE=--setup-unattended"
+if /i "%~1"=="--from-setup-quiet" set "SETUP_MODE=--setup-unattended"
 start "" /wait "%DEST%\GGF-Tray.exe" --register-startup %SETUP_MODE%
 if errorlevel 1 (
   echo Windows startup could not be configured. See Start silently with Windows in the tray menu.
   exit /b 1
 )
 if /i "%~1"=="--no-launch" exit /b 0
+if /i "%~1"=="--from-setup" exit /b 0
+if /i "%~1"=="--from-setup-quiet" exit /b 0
 echo GGF Tray is installed at "%DEST%\GGF-Tray.exe".
 echo Starting GGF Tray. Look in the notification area by the clock.
 start "" /d "%DEST%" "%DEST%\GGF-Tray.exe"
@@ -43,14 +54,16 @@ exit /b 0
 :mismatch
 echo A different EXE is already in "%DEST%". No existing program was replaced.
 echo You can run the included ggf-menu\GGF-Tray.exe directly.
-pause
-exit /b 1
+goto setupError
 :missing
 echo Extract the complete ZIP before running the installer.
-pause
-exit /b 1
+goto setupError
 :failed
 echo Setup did not finish. See the error above.
+:setupError
+if /i "%~1"=="--from-setup-quiet" exit /b 1
+if /i "%~1"=="--from-setup" exit /b 1
+if /i "%~1"=="--no-launch" exit /b 1
 pause
 exit /b 1
 
@@ -63,8 +76,9 @@ var oldManagedPath=fso.BuildPath(fso.GetParentFolderName(fso.GetParentFolderName
 var priorManagedPath=fso.BuildPath(fso.GetParentFolderName(fso.GetParentFolderName(target)), "Tray-0.14.0\\GGF-Tray.exe");
 var lastManagedPath=fso.BuildPath(fso.GetParentFolderName(fso.GetParentFolderName(target)), "Tray-0.15.0\\GGF-Tray.exe");
 var lastPatchPath=fso.BuildPath(fso.GetParentFolderName(fso.GetParentFolderName(target)), "Tray-0.15.1\\GGF-Tray.exe");
+var lastReleasePath=fso.BuildPath(fso.GetParentFolderName(fso.GetParentFolderName(target)), "Tray-0.16.0\\GGF-Tray.exe");
 var existing=String(link.TargetPath).toLowerCase();
-if (fso.FileExists(linkPath) && existing !== target.toLowerCase() && existing !== oldManagedPath.toLowerCase() && existing !== priorManagedPath.toLowerCase() && existing !== lastManagedPath.toLowerCase() && existing !== lastPatchPath.toLowerCase()) {
+if (fso.FileExists(linkPath) && existing !== target.toLowerCase() && existing !== oldManagedPath.toLowerCase() && existing !== priorManagedPath.toLowerCase() && existing !== lastManagedPath.toLowerCase() && existing !== lastPatchPath.toLowerCase() && existing !== lastReleasePath.toLowerCase()) {
     WScript.Echo("An existing shortcut was preserved."); WScript.Quit(1);
 }
 link.TargetPath=target;

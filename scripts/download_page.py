@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 REPO = "gjnave/GGF-Tray"
 ORIGIN = f"https://github.com/{REPO}"
 ASSETS = ("GGF-Tray-Windows-x64.zip", "GGF-Tray-OneFile.exe", "SHA256SUMS.txt")
+SETUP = "GGF-Tray-Setup.exe"
 
 
 def gh_json(endpoint, *options):
@@ -42,7 +43,9 @@ def build_site(out):
     if latest["id"] not in {r["id"] for r in releases}:
         raise ValueError("The latest release is missing from public history.")
     assets = {a["name"]: a for a in latest["assets"] if a["state"] == "uploaded"}
-    for name in ASSETS:
+    has_setup = SETUP in assets
+    public_names = ASSETS + (SETUP,) if has_setup else ASSETS
+    for name in public_names:
         if assets[name]["browser_download_url"] != f"{ORIGIN}/releases/download/{tag}/{name}":
             raise ValueError(f"Unexpected download address for {name}")
     rows = []
@@ -55,9 +58,23 @@ def build_site(out):
                     f'{date_label(r["published_at"])}</time></td><td><a href="{link}" aria-label="View release {version}">'
                     'View release <span aria-hidden="true">↗</span></a></td></tr>')
     source = ROOT / "downloads"
+    primary = assets[SETUP if has_setup else ASSETS[0]]
+    manual_link = (f'<a href="{assets[ASSETS[0]]["browser_download_url"]}">Manual ZIP</a>'
+                   '<span class="divider" aria-hidden="true">/</span>') if has_setup else ""
+    if has_setup:
+        button = "Download Windows installer"
+        method = "Setup installs GGF Tray for your Windows account and adds it to the Start menu."
+        steps = """<li><div><h3>Open Setup</h3><p>Double-click <strong>GGF-Tray-Setup.exe</strong> in Downloads. If an older tray is running, quit it from its tray menu.</p></div></li>
+        <li><div><h3>Choose Install GGF Tray</h3><p>Setup extracts the files and opens the app. First setup downloads about 288 MiB of components.</p></div></li>"""
+    else:
+        button = "Download installer ZIP"
+        method = "Use the installer ZIP for a Start menu entry and automatic startup."
+        steps = """<li><div><h3>Extract the ZIP</h3><p>Quit an older GGF Tray if it’s running. Right-click the downloaded ZIP and choose <strong>Extract All</strong>.</p></div></li>
+        <li><div><h3>Run the installer</h3><p>Open the extracted folder and double-click <strong>Install GGF Tray.bat</strong>. First setup downloads about 288 MiB of components.</p></div></li>"""
     text = render((source / "index.html").read_text(encoding="utf-8"), VERSION=tag,
-                  DATE=date_label(latest["published_at"]), SIZE=f'{assets[ASSETS[0]]["size"] / 1_000_000:.1f} MB',
-                  ZIP=assets[ASSETS[0]]["browser_download_url"], EXE=assets[ASSETS[1]]["browser_download_url"],
+                  DATE=date_label(latest["published_at"]), SIZE=f'{primary["size"] / 1_000_000:.1f} MB',
+                  PRIMARY=primary["browser_download_url"], BUTTON=button, METHOD=method, STEPS=steps,
+                  MANUAL=manual_link, EXE=assets[ASSETS[1]]["browser_download_url"],
                   HASH=assets[ASSETS[2]]["browser_download_url"], LICENSE=f"{ORIGIN}/blob/{tag}/LICENSE.txt",
                   ROWS="\n".join(rows))
     out.mkdir(parents=True, exist_ok=True)

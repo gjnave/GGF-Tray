@@ -1390,7 +1390,7 @@ if __name__ == "__main__":
         except Exception as exc:
             failures.append(f"helper initialization failed: {exc}")
         with open(os.path.join(STATE_DIR, "release-diagnostics.txt"),"w",encoding="utf-8") as report:
-            report.write("; ".join(failures) if failures else "GGF Tray 0.16.0 self-test OK")
+            report.write("; ".join(failures) if failures else "GGF Tray 0.16.1 self-test OK")
         if failures:
             print("GGF Tray self-test FAILED: " + "; ".join(failures))
             sys.exit(1)

@@ -16,17 +16,16 @@
       <div class="hero-copy"><p class="platform"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M0 0h7v7H0zm9 0h7v7H9zM0 9h7v7H0zm9 0h7v7H9z"/></svg> Windows x64</p>
         <h1 id="app-name">GGF Tray</h1>
         <p class="intro">Browse the GGF catalog, install your apps, and launch them again from the Windows tray.</p>
-        <a class="download" href="@@ZIP@@"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v11m-5-5 5 5 5-5M4 16v4h16v-4"/></svg>Download installer ZIP</a>
+        <a class="download" href="@@PRIMARY@@"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v11m-5-5 5 5 5-5M4 16v4h16v-4"/></svg>@@BUTTON@@</a>
         <p class="release-meta"><strong>@@VERSION@@</strong><span>@@DATE@@</span><span>@@SIZE@@</span></p>
       </div>
       <figure><img src="tray-art.svg" width="440" height="292" alt="Turquoise GGF tray icon"><figcaption>Look for the turquoise G by your Windows clock.</figcaption></figure>
     </section>
-    <div class="alternatives"><strong>Other downloads</strong><div><a href="@@EXE@@">Standalone EXE</a><span class="divider" aria-hidden="true">/</span><a href="@@HASH@@">SHA-256 checksums</a></div></div>
+    <div class="alternatives"><strong>Other downloads</strong><div>@@MANUAL@@<a href="@@EXE@@">Standalone EXE</a><span class="divider" aria-hidden="true">/</span><a href="@@HASH@@">SHA-256 checksums</a></div></div>
     <section class="guide section" id="install" aria-labelledby="install-title">
-      <div><h2 id="install-title">Getting started</h2><p class="aside">Use the installer ZIP for a Start menu entry and automatic startup.</p></div>
+      <div><h2 id="install-title">Getting started</h2><p class="aside">@@METHOD@@</p></div>
       <ol class="steps">
-        <li><div><h3>Extract the ZIP</h3><p>Quit an older GGF Tray if it’s running. Right-click the downloaded ZIP and choose <strong>Extract All</strong>.</p></div></li>
-        <li><div><h3>Run the installer</h3><p>Open the extracted folder and double-click <strong>Install GGF Tray.bat</strong>. First setup downloads about 288 MiB of components.</p></div></li>
+        @@STEPS@@
         <li><div><h3>Open your catalog</h3><p>Right-click the turquoise G near the clock and choose <strong>Browse App Catalog</strong>. Browse as a guest or sign in to download apps your membership includes.</p></div></li>
       </ol>
     </section>
