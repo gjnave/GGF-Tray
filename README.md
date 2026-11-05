@@ -8,7 +8,9 @@ The download page shows the recommended installer, its release date, and earlier
 
 Quit any running GGF Tray, double-click **GGF-Tray-Setup.exe**, and choose **Install GGF Tray**. Setup extracts the files, installs for your Windows account, and opens the tray. Right-click the turquoise G by the clock to open the catalog or change **Start silently with Windows**.
 
-The first installation downloads about 288 MiB of Windows components from their publishers on PyPI. Setup verifies each download and stores the libraries under your Windows account. Subsequent launches use the installed copies. The standalone EXE uses the same setup.
+Setup shows the install folder before you start. On the first launch, a small card near the clock lets you open the catalog or the app folder. To find the folder again, right-click the G and choose **Open GGF Tray folder**. The standalone EXE runs from the folder where you saved it.
+
+The first installation downloads about 288 MiB of Windows components from their publishers on PyPI. Setup verifies each download and stores the libraries under your Windows account. Subsequent launches use the installed copies. The standalone EXE uses the same components.
 
 GGF licenses its original code and artwork for end-user operation of the official, unmodified release. Each third-party component retains its own license and can be replaced independently. [Read the GGF end-user license](LICENSE.txt).
 
@@ -33,4 +35,4 @@ To create the public downloads locally, return to the repository root. Pass the 
 ggf-menu\build-venv\Scripts\python.exe scripts\package_windows.py "PATH-TO-BUILT-EXE" "release\public-assets"
 ```
 
-Pushes to main run the Windows tests, build Setup, install it in a fresh profile, check the manual ZIP installer, and run the installed app's self-test. To publish, tag the intended commit with the matching app version (for example, `v0.16.1`). The release workflow attaches Setup, the manual ZIP, the standalone EXE, and their checksums to GitHub Releases.
+Pushes to main run the Windows tests, build Setup, install it in a fresh profile, check the manual ZIP installer, and run the installed app's self-test. To publish, tag the intended commit with the matching app version (for example, `v0.16.2`). The release workflow attaches Setup, the manual ZIP, the standalone EXE, and their checksums to GitHub Releases.

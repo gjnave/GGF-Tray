@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from ggf_catalog_window import CatalogOwner, activate_existing
 from ggf_startup import configure, paths
-from ggf_welcome_state import welcome_seen, remember_welcome
+from ggf_welcome_state import welcome_seen, remember_welcome, managed_install, tray_notice_marker
 
 class TrayLifecycleTests(unittest.TestCase):
     def setUp(self):
@@ -55,4 +55,17 @@ class TrayLifecycleTests(unittest.TestCase):
         (state/"visualizer_config.json").write_text('{}')
         remember_welcome()
         self.assertTrue(welcome_seen())
+
+    def test_portable_use_does_not_consume_install_notice_and_upgrade_does_not_repeat_it(self):
+        programs = self.base / "Local/Programs/Get Going Fast"
+        for folder, is_install, already_seen in (
+            (self.base / "Downloads", False, False),
+            (programs / "Tray-0.16.2", True, False),
+            (programs / "Tray-0.17.0", True, True),
+            (self.base / "Downloads/Tray-0.17.0", False, True),
+        ):
+            with self.subTest(folder=folder), patch("ggf_welcome_state.get_app_dir", return_value=folder):
+                self.assertEqual(managed_install(), is_install)
+                self.assertEqual(tray_notice_marker().exists(), already_seen)
+                tray_notice_marker().touch()
 

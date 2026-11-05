@@ -104,7 +104,7 @@ internal static class Setup
         }
     }
 
-    static bool AskInstall()
+    static bool AskInstall(string destination)
     {
         using (var form = new Form())
         using (var panel = new FlowLayoutPanel())
@@ -127,11 +127,14 @@ internal static class Setup
             var text = new Label { AutoSize = true, MaximumSize = new Size(390, 0),
                 Margin = new Padding(3, 9, 3, 14),
                 Text = "Setup installs GGF Tray for your Windows account and opens it when ready. First setup downloads about 288 MiB of components." };
+            var location = new Label { AutoSize = true, MaximumSize = new Size(390, 0),
+                Margin = new Padding(3, 0, 3, 14), UseMnemonic = false,
+                Text = "Install location:" + Environment.NewLine + destination };
             var buttons = new FlowLayoutPanel { AutoSize = true, WrapContents = false };
             var install = new Button { AutoSize = true, Text = "Install GGF Tray", DialogResult = DialogResult.OK };
             var cancel = new Button { AutoSize = true, Text = "Cancel", DialogResult = DialogResult.Cancel };
             buttons.Controls.AddRange(new Control[] { install, cancel });
-            panel.Controls.AddRange(new Control[] { heading, text, buttons });
+            panel.Controls.AddRange(new Control[] { heading, text, location, buttons });
             form.Controls.Add(panel);
             form.AcceptButton = install;
             form.CancelButton = cancel;
@@ -148,18 +151,18 @@ internal static class Setup
         try
         {
             byte[] bytes = ReadPackage();
-            if (!quiet && (!AskInstall() || !ReadyToInstall())) return 2;
+            string local = Environment.GetEnvironmentVariable("LOCALAPPDATA");
+            if (String.IsNullOrEmpty(local) || !Path.IsPathRooted(local)) throw new IOException("Windows local app data is unavailable.");
+            string programs = Path.Combine(local, "Programs");
+            string ggf = Path.Combine(programs, "Get Going Fast");
+            string destination = Path.Combine(ggf, "Tray-" + Package.Version);
+            if (!quiet && (!AskInstall(destination) || !ReadyToInstall())) return 2;
             bool first;
             using (var installation = new Mutex(true, @"Local\GetGoingFast.Tray.Setup", out first))
             {
                 if (!first) throw new IOException("Another GGF Tray installation is already open.");
-                string local = Environment.GetEnvironmentVariable("LOCALAPPDATA");
-                if (String.IsNullOrEmpty(local) || !Path.IsPathRooted(local)) throw new IOException("Windows local app data is unavailable.");
-                string programs = Path.Combine(local, "Programs");
-                string ggf = Path.Combine(programs, "Get Going Fast");
                 CheckOrdinaryPath(programs);
                 CheckOrdinaryPath(ggf);
-                string destination = Path.Combine(ggf, "Tray-" + Package.Version);
                 Extract(bytes, destination);
                 var register = new ProcessStartInfo {
                     FileName = Path.Combine(Environment.SystemDirectory, "cmd.exe"),

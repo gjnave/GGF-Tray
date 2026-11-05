@@ -24,7 +24,7 @@ import shutil
 import secrets
 from ggf_media import ACTIONS as MEDIA_ACTIONS
 from ggf_catalog_window import launch_catalog
-from ggf_welcome_state import welcome_seen
+from ggf_welcome_state import tray_notice_marker
 import ggf_startup
 from ggf_runtime import user_file
 from ggf_setup import prepare, launch_entry
@@ -171,7 +171,7 @@ MUTEX_NAME = "Global\\GGF-Tray-Unique-Mutex-87A3F9B2"
 mutex_handle = None
 APP_ID = "audio-v"  # Audio_visualizer.py 
 WHISPER_ENABLED = False
-UTILITY_ARGS = {"--register-startup","--utility","--ggf-ytdlp","--install-zip", "--show-visualizer-menu", "--show-companion-menu", "--run-app-search", "--run-visualizer", "--self-test"}
+UTILITY_ARGS = {"--tray-notice","--register-startup","--utility","--ggf-ytdlp","--install-zip", "--show-visualizer-menu", "--show-companion-menu", "--run-app-search", "--run-visualizer", "--self-test"}
 TRAY_IPC_HOST = "127.0.0.1"
 TRAY_IPC_PORT = 47653
 TRAY_IPC_BUFFER = 65536
@@ -302,9 +302,20 @@ class GGFTray:
 
         self.helper_processes = []
 
-    def show_startup_tips_if_needed(self):
-        if "--startup" not in sys.argv and not welcome_seen():
-            launch_catalog(welcome=True)
+    def on_icon_ready(self, icon):
+        icon.visible = True
+        if "--startup" in sys.argv or tray_notice_marker().is_file():
+            return
+        args = [sys.executable]
+        if not getattr(sys, "frozen", False):
+            args.append(os.path.abspath(__file__))
+        env = get_subprocess_env()
+        env.pop("GGF_TRAY_IPC_TOKEN", None)
+        try:
+            self.track_process(subprocess.Popen([*args, "--tray-notice"], cwd=SCRIPT_DIR, env=env))
+        except OSError:
+            # Keep the tray usable. A later interactive launch can try again.
+            pass
 
     def toggle_startup(self):
         try:
@@ -662,6 +673,11 @@ class GGFTray:
             self.start_audio_visualizer()
         elif action == "show_tour":
             launch_catalog(welcome=True)
+        elif action == "open_app_folder":
+            try:
+                os.startfile(SCRIPT_DIR)
+            except OSError as exc:
+                self.show_message("GGF Tray folder", str(exc), "error")
         elif action == "visualizer_guide":
             self.start_audio_visualizer(force_tour=True)
         elif action == "startup_toggle":
@@ -778,6 +794,7 @@ class GGFTray:
 
         menu.add_separator()
         menu.add_command(label="Welcome tour…", command=lambda: invoke_menu_action("show_tour"))
+        menu.add_command(label="Open GGF Tray folder", command=lambda: invoke_menu_action("open_app_folder"))
         startup_value = tk.BooleanVar(root, value=ggf_startup.is_registered())
         menu.add_checkbutton(label="Start silently with Windows", variable=startup_value,
                              command=lambda: invoke_menu_action("startup_toggle"))
@@ -1307,6 +1324,7 @@ class GGFTray:
         menu_items.extend([
             item('Browse App Catalog', self.open_app_search, default=True),
             item('Welcome tour…', lambda: self.open_menu_for('show_tour')),
+            item('Open GGF Tray folder', lambda: self.open_menu_for('open_app_folder')),
             item('Start silently with Windows', lambda: self.open_menu_for('startup_toggle'),
                  checked=lambda _: ggf_startup.is_registered()),
             item('Member Site', self.open_website),
@@ -1345,13 +1363,13 @@ class GGFTray:
                 ggf_startup.configure("default")
             except Exception as exc:
                 self.show_message("Windows startup", str(exc), "error")
-        self.show_startup_tips_if_needed()
-        
-        # Run the icon (blocks)
-        self.icon.run()
+        self.icon.run(setup=self.on_icon_ready)
 
 if __name__ == "__main__":
-    if "--register-startup" in sys.argv:
+    if "--tray-notice" in sys.argv:
+        from ggf_tray_notice import main as notice_main
+        sys.exit(notice_main())
+    elif "--register-startup" in sys.argv:
         try:
             ggf_startup.configure("install")
         except Exception as exc:
@@ -1390,7 +1408,7 @@ if __name__ == "__main__":
         except Exception as exc:
             failures.append(f"helper initialization failed: {exc}")
         with open(os.path.join(STATE_DIR, "release-diagnostics.txt"),"w",encoding="utf-8") as report:
-            report.write("; ".join(failures) if failures else "GGF Tray 0.16.1 self-test OK")
+            report.write("; ".join(failures) if failures else "GGF Tray 0.16.2 self-test OK")
         if failures:
             print("GGF Tray self-test FAILED: " + "; ".join(failures))
             sys.exit(1)

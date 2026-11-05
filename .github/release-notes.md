@@ -8,7 +8,7 @@
 
 1. Quit GGF Tray if an older version is running.
 2. Double-click **GGF-Tray-Setup.exe** and choose **Install GGF Tray**. It extracts the files, installs, and opens the app. First setup downloads about 288 MiB of components.
-3. Right-click the turquoise **G** near the Windows clock and choose **Browse App Catalog**.
+3. On first launch, choose **Open catalog** in the small welcome card by the clock. To find the installed files later, right-click the turquoise **G** and choose **Open GGF Tray folder**.
 
 | Other files | When to choose them |
 | --- | --- |

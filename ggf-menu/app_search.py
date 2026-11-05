@@ -32,7 +32,7 @@ def start_setup(path):
 from PySide6.QtGui import QIcon
 from ggf_runtime import get_resource_dir
 from ggf_catalog_window import CatalogOwner, activate_existing
-from ggf_welcome import Guide, welcome_seen, remember_welcome
+from ggf_welcome import Guide, remember_welcome
 
 
 class SearchDialog(QWidget):
@@ -299,7 +299,7 @@ def main():
         timer.timeout.connect(activated)
         timer.start(125)
         window.show()
-        if tour or not welcome_seen():
+        if tour:
             QTimer.singleShot(0, window.show_welcome)
         return app.exec()
     finally:

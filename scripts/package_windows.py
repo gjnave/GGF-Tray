@@ -69,6 +69,8 @@ def smoke_install(bundle, setup, work, version, expected_hash):
     diagnostics = (local / "GGF-Tray/release-diagnostics.txt").read_text()
     if diagnostics != f"GGF Tray {version} self-test OK":
         raise ValueError(f"Unexpected packaged diagnostics: {diagnostics}")
+    if list((local / "GGF-Tray").glob("tray-notice-*.seen")):
+        raise ValueError("An unattended installation consumed the first interactive welcome")
 
 
 def main():

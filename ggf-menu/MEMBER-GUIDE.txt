@@ -1,4 +1,4 @@
-GET GOING FAST • WINDOWS TRAY 0.16.1
+GET GOING FAST • WINDOWS TRAY 0.16.2
 
 1. Double-click "GGF-Tray-Setup.exe" and choose "Install GGF Tray".
    Setup extracts the files, installs the tray and opens it when ready.
@@ -22,8 +22,9 @@ GET GOING FAST • WINDOWS TRAY 0.16.1
 Windows sign-in starts the tray silently by default. Look for the turquoise G
    by the clock. Right-click it and uncheck "Start silently with Windows" to
    turn this off. A later upgrade preserves that choice.
-   The first time you open GGF yourself, the welcome guide introduces the
-   catalog and tray menu. Choose "Welcome tour..." in the tray to replay it.
+   On the first interactive launch, a small card by the clock shows where
+   to find GGF. Choose "Open catalog" or "Open GGF Tray folder". You can
+   also open that folder or choose "Welcome tour..." from the tray menu.
 
 2. Open "Browse App Catalog" from the GGF icon in the notification area by
    the clock (it may be under the up arrow). Search by name or description,
@@ -77,7 +78,8 @@ Troubleshooting:
 - Setup interrupted: the original download is retained. Any partially prepared
   folder stays available for inspection; choose a new folder on the next try.
 - Library, shortcuts and settings live under %LOCALAPPDATA%\GGF-Tray.
-  The installed tray is under %LOCALAPPDATA%\Programs\Get Going Fast\Tray-0.16.1.
+  Setup installs to %LOCALAPPDATA%\Programs\Get Going Fast\Tray-0.16.2.
+  The standalone EXE runs from whichever folder you put it in.
 - Supported target: Windows x64. Tested on Windows 11. No signing certificate
   is embedded in this release. If Windows shows a publisher warning, compare
   the file's SHA-256 to the value supplied by Get Going Fast.

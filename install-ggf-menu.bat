@@ -2,7 +2,7 @@
 @echo off
 setlocal EnableExtensions DisableDelayedExpansion
 set "INSTALL_SCRIPT=%~f0"
-set "DEST=%LOCALAPPDATA%\Programs\Get Going Fast\Tray-0.16.1"
+set "DEST=%LOCALAPPDATA%\Programs\Get Going Fast\Tray-0.16.2"
 if /i "%~1"=="--from-setup" goto extracted
 if /i "%~1"=="--from-setup-quiet" goto extracted
 if /i "%~dp0"=="%DEST%\" if exist "%DEST%\GGF-Tray.exe" goto extracted
@@ -77,8 +77,9 @@ var priorManagedPath=fso.BuildPath(fso.GetParentFolderName(fso.GetParentFolderNa
 var lastManagedPath=fso.BuildPath(fso.GetParentFolderName(fso.GetParentFolderName(target)), "Tray-0.15.0\\GGF-Tray.exe");
 var lastPatchPath=fso.BuildPath(fso.GetParentFolderName(fso.GetParentFolderName(target)), "Tray-0.15.1\\GGF-Tray.exe");
 var lastReleasePath=fso.BuildPath(fso.GetParentFolderName(fso.GetParentFolderName(target)), "Tray-0.16.0\\GGF-Tray.exe");
+var firstSetupPath=fso.BuildPath(fso.GetParentFolderName(fso.GetParentFolderName(target)), "Tray-0.16.1\\GGF-Tray.exe");
 var existing=String(link.TargetPath).toLowerCase();
-if (fso.FileExists(linkPath) && existing !== target.toLowerCase() && existing !== oldManagedPath.toLowerCase() && existing !== priorManagedPath.toLowerCase() && existing !== lastManagedPath.toLowerCase() && existing !== lastPatchPath.toLowerCase() && existing !== lastReleasePath.toLowerCase()) {
+if (fso.FileExists(linkPath) && existing !== target.toLowerCase() && existing !== oldManagedPath.toLowerCase() && existing !== priorManagedPath.toLowerCase() && existing !== lastManagedPath.toLowerCase() && existing !== lastPatchPath.toLowerCase() && existing !== lastReleasePath.toLowerCase() && existing !== firstSetupPath.toLowerCase()) {
     WScript.Echo("An existing shortcut was preserved."); WScript.Quit(1);
 }
 link.TargetPath=target;
