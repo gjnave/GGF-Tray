@@ -1,56 +1,46 @@
-name: Build GGF Tray EXE
+name: Build Windows installer
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
 
 jobs:
-  build:
-    runs-on: windows-latest
-
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 40
     steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          python-version: "3.10"
-
-      - name: Install dependencies
-        shell: pwsh
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install pyinstaller
-          python -m pip install -r ggf-menu/requirements.txt
-
-      - name: Build EXE
-        shell: pwsh
-        run: |
-          python -m PyInstaller `
-            --noconfirm `
-            --clean `
-            --onefile `
-            --windowed `
-            --name GGF-Tray-OneFile `
-            --distpath ggf-menu/dist_onefile `
-            --workpath ggf-menu/build_onefile `
-            --icon ggf-menu/logo.ico `
-            --add-data "ggf-menu/logo.ico;." `
-            --collect-all certifi `
-            --collect-all imageio_ffmpeg `
-            --collect-all numpy `
-            --collect-all pyaudiowpatch `
-            --hidden-import app_search `
-            --hidden-import audio_visualizer_tray `
-            --hidden-import ggf_auth_token `
-            --hidden-import PyQt6.QtWebEngineWidgets `
-            ggf-menu/ggf-tray.py
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
-          name: ggf-tray-onefile
-          path: ggf-menu/dist_onefile/GGF-Tray-OneFile.exe
+          python-version: '3.11.9'
+          architecture: x64
+          cache: pip
+          cache-dependency-path: ggf-menu/requirements-release.txt
+      - name: Install pinned Windows build dependencies
+        shell: cmd
+        run: |
+          python -m pip install --only-binary=:all: -r ggf-menu\requirements-release.txt
+      - name: Test tray and build one-file EXE
+        working-directory: ggf-menu
+        shell: cmd
+        run: |
+          python -m unittest discover -s tests -v || exit /b 1
+          python -m PyInstaller --distpath "%RUNNER_TEMP%\tray-dist" --workpath "%RUNNER_TEMP%\tray-build" GGF-Tray-Release.spec
+      - name: Package and test the member installation
+        shell: cmd
+        run: python scripts\package_windows.py "%RUNNER_TEMP%\tray-dist\GGF-Tray.exe" public-assets
+      - name: Save verified Windows downloads
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-downloads
+          path: public-assets/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7

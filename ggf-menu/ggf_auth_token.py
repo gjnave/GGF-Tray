@@ -6,6 +6,8 @@ desktop app.  Cached bearer data is protected with Windows DPAPI.
 """
 
 import ctypes
+import hashlib
+import re
 import json
 import os
 import secrets
@@ -26,7 +28,7 @@ from ggf_runtime import (
 
 
 configure_ssl_environment()
-TOKEN_PATTERN_PREFIX = "ggf_tray_"
+TOKEN_PATTERN_PREFIX = "ggf_desktop_"
 DPAPI_UI_FORBIDDEN = 0x1
 
 
@@ -87,55 +89,20 @@ def _dpapi_unprotect(payload: bytes) -> bytes:
 
 class AuthManager:
     def __init__(self, cache_file=None):
-        self.cache_file = cache_file or os.path.join(get_state_dir(), "auth_cache.dat")
-        self.legacy_cache_files = {
-            os.path.join(get_state_dir(), "auth_cache.json"),
-            os.path.join(get_app_dir(), "auth_cache.json"),
-        }
+        self.cache_file = cache_file or os.path.join(get_state_dir(), "auth_desktop_v2.dat")
         self.verify_url = "https://getgoingfast.pro/app-auth-check.php"
         self.login_url = "https://getgoingfast.pro/app-link.php"
         self.cached_auth = None
         self.load_cache()
 
-    def _load_legacy_cache(self):
-        for path in self.legacy_cache_files:
-            if not os.path.isfile(path):
-                continue
-            try:
-                with open(path, "r", encoding="utf-8") as handle:
-                    data = json.load(handle)
-                if isinstance(data, dict):
-                    self.save_cache(data)
-                    try:
-                        os.remove(path)
-                    except OSError:
-                        pass
-                    return data
-            except (OSError, ValueError, TypeError):
-                continue
-        return None
-
     def load_cache(self):
-        """Load the current user's DPAPI-protected authentication cache."""
-        data = None
-        if os.path.isfile(self.cache_file):
-            try:
-                with open(self.cache_file, "rb") as handle:
-                    encrypted = handle.read()
-                data = json.loads(_dpapi_unprotect(encrypted).decode("utf-8"))
-            except Exception as exc:
-                print(f"Could not read protected login cache: {redact_secrets(exc)}")
-        if not isinstance(data, dict):
-            data = self._load_legacy_cache()
-        if isinstance(data, dict) and data.get("expires", 0) > time.time():
-            self.cached_auth = data
-        else:
-            self.cached_auth = None
-            if os.path.exists(self.cache_file):
-                try:
-                    os.remove(self.cache_file)
-                except OSError:
-                    pass
+        self.cached_auth = None
+        try:
+            with open(self.cache_file,"rb") as stream:
+                data = json.loads(_dpapi_unprotect(stream.read()).decode())
+            if isinstance(data,dict) and data.get("expires",0)>time.time() and re.fullmatch(r"ggf_desktop_[A-Za-z0-9_-]{43}",data.get("token","")):
+                self.cached_auth = data
+        except (OSError, TypeError, ValueError): pass
 
     def save_cache(self, auth_data):
         """Atomically save auth data encrypted for the current Windows user."""
@@ -154,12 +121,20 @@ class AuthManager:
 
     def clear_cache(self):
         self.cached_auth = None
-        for path in {self.cache_file, *self.legacy_cache_files}:
-            try:
-                if os.path.exists(path):
-                    os.remove(path)
-            except OSError:
-                pass
+        self.save_cache({})
+        self.cached_auth = None
+
+    def logout(self):
+        self.load_cache()
+        token = (self.cached_auth or {}).get("token")
+        self.clear_cache()
+        if not token: return True
+        try:
+            req=urllib.request.Request(self.verify_url,data=b"action=revoke",headers={"X-GGF-App-Token":token,"User-Agent":"GGF-Tray/0.13 (Windows; Member Catalog)"})
+            with urlopen_with_ssl(req,timeout=8) as reply:
+                return json.load(reply).get("revoked") is True
+        except Exception:
+            return False
 
     @staticmethod
     def generate_token():
@@ -168,27 +143,28 @@ class AuthManager:
     def check_token(self, token):
         """Return verified auth data, or None while unlinked/unavailable."""
         try:
-            # Send the token BOTH as a header (preferred -- keeps it out of most
-            # logs) and as a ?token= query param (fallback for a server that only
-            # reads the query). The token is URL-safe by construction, so it needs
-            # no escaping. This makes login work whether or not the header-aware
-            # app-auth-check.php has been deployed yet.
-            sep = "&" if "?" in self.verify_url else "?"
+            return self.verify_link(token)
+        except (OSError, ValueError):
+            return None
+
+    def verify_link(self, token):
+        """A 401 means the browser has not confirmed. Other failures are actionable."""
+        try:
             req = urllib.request.Request(
-                f"{self.verify_url}{sep}token={token}",
+                self.verify_url,
                 headers={
-                    "User-Agent": "GGF-Tray-App/0.12",
+                    "User-Agent": "GGF-Tray-App/0.13",
                     "X-GGF-App-Token": token,
                     "Cache-Control": "no-store",
                 },
             )
             with urlopen_with_ssl(req, timeout=10) as response:
                 data = json.loads(response.read().decode("utf-8"))
-            if not data.get("authenticated"):
-                return None
+            if not isinstance(data, dict) or data.get("protocol") != 2 or data.get("authenticated") is not True:
+                raise ValueError("The website did not confirm the desktop link.")
             server_expires = int(data.get("expires") or 0)
             if server_expires <= int(time.time()):
-                return None
+                raise ValueError("The website returned an expired link. Cancel and sign in again.")
             return {
                 "tier": data.get("tier", "free"),
                 "name": data.get("name", "User"),
@@ -197,22 +173,23 @@ class AuthManager:
                 "verified_at": time.time(),
             }
         except urllib.error.HTTPError as exc:
-            if exc.code not in {400, 401, 403, 404}:
-                print(f"Login check failed with HTTP {exc.code}")
-            return None
-        except urllib.error.URLError:
-            return None
-        except Exception as exc:
-            print(f"Error checking login: {redact_secrets(exc)}")
-            return None
+            exc.close()
+            if exc.code == 401:
+                return None
+            if exc.code == 403:
+                raise PermissionError("GGF could not approve this account for desktop access.") from None
+            raise ConnectionError(f"GGF could not check the link (HTTP {exc.code}).") from None
+        except (urllib.error.URLError, TimeoutError, ConnectionError):
+            raise ConnectionError("Could not reach GGF to check the link.") from None
 
     def get_auth(self, force_refresh=False):
+        self.load_cache()
         if not self.cached_auth:
             return None
         if self.cached_auth.get("expires", 0) <= time.time():
             self.clear_cache()
             return None
-        if not force_refresh and self.cached_auth.get("verified_at", 0) > time.time() - 3600:
+        if not force_refresh:  # Display only; each transfer rechecks the live account on the server.
             return self.cached_auth
         token = self.cached_auth.get("token")
         if not token:
@@ -224,16 +201,19 @@ class AuthManager:
             return refreshed
         return None
 
+    def open_link(self, token):
+        """Reopen the same public challenge; never send the bearer to a browser."""
+        login_url = f"{self.login_url}?link_id={hashlib.sha256(token.encode()).hexdigest()}"
+        return webbrowser.open(login_url)
+
     def login(self):
         token = self.generate_token()
-        login_url = f"{self.login_url}?app=tray&app_token={token}"
-        print("Opening the browser for Get Going Fast login...")
-        webbrowser.open(login_url)
+        self.open_link(token)
         return token
 
-    def poll_for_auth(self, token, timeout=300, interval=2):
+    def poll_for_auth(self, token, timeout=300, interval=4, cancelled=lambda:False):
         start_time = time.time()
-        while time.time() - start_time < timeout:
+        while time.time() - start_time < timeout and not cancelled():
             auth_data = self.check_token(token)
             if auth_data:
                 self.save_cache(auth_data)

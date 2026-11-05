@@ -1,0 +1,82 @@
+GET GOING FAST • WINDOWS TRAY 0.16.0
+
+1. Extract the entire ZIP. Double-click "Install GGF Tray.bat".
+   No Python installation or administrator account is required for the tray.
+   The installer creates a Start menu entry named "Get Going Fast Tray".
+   You can also run ggf-menu\GGF-Tray.exe directly from the extracted folder.
+   If a previous tray is running, quit that tray using its menu first.
+
+   First setup downloads about 288 MiB from the components' publishers on
+   PyPI. An internet connection is needed once. A later launch uses the
+   installed libraries. Setup runs under your own Windows account.
+
+   GGF's LICENSE.txt applies to its original application and artwork. Each
+   third-party component keeps its own terms. Its notices are in its
+   .dist-info folder under %LOCALAPPDATA%\GGF-Tray\components, beside
+   the libraries. Compatible libraries can be replaced after quitting the
+   tray. Keep the wheels folder for an offline reinstall of this version.
+   Copy it to the same per-user components folder before running setup.
+
+Windows sign-in starts the tray silently by default. Look for the turquoise G
+   by the clock. Right-click it and uncheck "Start silently with Windows" to
+   turn this off. A later upgrade preserves that choice.
+   The first time you open GGF yourself, the welcome guide introduces the
+   catalog and tray menu. Choose "Welcome tour..." in the tray to replay it.
+
+2. Open "Browse App Catalog" from the GGF icon in the notification area by
+   the clock (it may be under the up arrow). Search by name or description,
+   filter by category, or choose "Tool page" for details and web purchases.
+   You can browse without signing in. An offline catalog is read-only.
+
+3. Choose "Sign in", complete your GGF website login, compare the two link
+   codes, and approve the desktop link in your browser. Return to the catalog.
+   If you landed on the member homepage, choose "Continue in browser" in the
+   catalog to reopen the matching link. Refresh checks the link immediately.
+   Use "Cancel sign-in" to start over. Only eligible members can download.
+   Choose the correct edition if the site lists multiple files. Downloads
+   are saved in Downloads\GGF; a second copy does not overwrite the first.
+
+4. Choose "Prepare" when asked to add an app. The library defaults to
+   "GGF Apps" in your Windows home folder. Choose another drive if needed;
+   the tray remembers it. Each app gets a new folder. Setup and Quick Launch
+   are separate choices. For an archive of editions, choose one inner package.
+   Select "Skip this step" to inspect the files without running setup.
+   Only run scripts or programs you recognize. Individual tools may download
+   models, require hardware or take time to finish; their own setup controls that.
+
+5. Find the app in the tray's Quick Launch menu. If setup creates the runner
+   later, Quick Launch can find it the next time you launch the entry. If no
+   runner is available it opens the app folder. You can also add or edit a
+   launcher using A.I. Apps > Quick Launch Manager. Documents, models and
+   workflow files are saved as files instead of being run as installers.
+
+6. Music Visualizer > Open Music Player opens a local music queue. Add audio
+   files, double-click a track, use Previous/Next, or drag the seek bar.
+   Closing the player pauses playback. Use the visualizer's Settings if it
+   is listening to the wrong speakers; other Windows audio can also drive it.
+
+7. Open Video, Audio or Image Operations to export media. Add files, drag them
+   into the list, or copy files in Explorer and select Paste files. Choose an
+   output folder or save beside each original. Each repeat gets a new name.
+   Convert Video includes audio extraction. Shrink Video reports the size change.
+
+8. Under Utility, open Hugging Face Model Browser. Search a name or enter a
+   repository ID or URL. Select a weight format and destination. Use ComfyUI…
+   to target an existing models subfolder. A split model downloads as a set.
+   Interrupted transfers resume in the same folder on the same revision.
+
+9. Utility > GGF Resource Search checks your linked membership. Prairie Dog
+   and higher can open the website search with an optional query. Use the same
+   member account in your browser to open source links.
+
+Troubleshooting:
+- Expired link or membership changed: refresh the catalog window or sign in
+  again. Website purchases use the tool page.
+- Setup interrupted: the original download is retained. Any partially prepared
+  folder stays available for inspection; choose a new folder on the next try.
+- Library, shortcuts and settings live under %LOCALAPPDATA%\GGF-Tray.
+  The installed tray is under %LOCALAPPDATA%\Programs\Get Going Fast\Tray-0.16.0.
+- Supported target: Windows x64. Tested on Windows 11. No signing certificate
+  is embedded in this release. If Windows shows a publisher warning, compare
+  the file's SHA-256 to the value supplied by Get Going Fast.
+

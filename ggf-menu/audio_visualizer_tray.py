@@ -7,15 +7,17 @@ import subprocess
 import time
 import socket
 import ctypes
-from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, 
+from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, 
                              QVBoxLayout, QLabel, QSlider, QPushButton,
                              QComboBox, QCheckBox)
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QPoint
-from PyQt6.QtWebEngineWidgets import QWebEngineView
+from PySide6.QtCore import Qt, QTimer, Signal, QPoint
+from PySide6.QtWebEngineWidgets import QWebEngineView
 import pyaudiowpatch as pyaudio
 import threading
 import queue
-from ggf_runtime import get_state_dir
+import shutil
+from ggf_runtime import get_state_dir, user_file
+from ggf_player import MusicPlayer
 
 try:
     import psutil
@@ -35,7 +37,7 @@ os.makedirs(STATE_DIR, exist_ok=True)
 CONFIG_PATH = os.path.join(STATE_DIR, "visualizer_config.json")
 STATE_PATH = os.path.join(STATE_DIR, "visualizer_state.json")
 CLICK_THROUGH_TIMEOUT_MS = 30000
-SHORTCUTS_CONFIG = os.path.join(SCRIPT_DIR, "shortcuts.txt")
+SHORTCUTS_CONFIG = user_file("shortcuts.txt")
 TRAY_IPC_HOST = "127.0.0.1"
 TRAY_IPC_PORT = 47653
 TRAY_IPC_BUFFER = 65536
@@ -54,7 +56,7 @@ def migrate_legacy_visualizer_state():
         if legacy == destination or not os.path.isfile(legacy) or os.path.exists(destination):
             continue
         try:
-            os.replace(legacy, destination)
+            shutil.copyfile(legacy, destination)
         except OSError:
             pass
 
@@ -91,8 +93,8 @@ def acquire_visualizer_mutex():
 
 class SettingsWindow(QWidget):
     """Settings window for visualizer configuration"""
-    settings_changed = pyqtSignal(dict)
-    audio_device_changed = pyqtSignal(int)
+    settings_changed = Signal(dict)
+    audio_device_changed = Signal(int)
     
     def __init__(self, config, audio_devices, current_device_index, parent=None):
         super().__init__(parent)
@@ -276,74 +278,9 @@ class SettingsWindow(QWidget):
         self.hide()
 
 
-class TourOverlay(QWidget):
-    """Tiny first-run walkthrough shown over the visualizer. Fail-safe: any error
-    just closes it, leaving the visualizer fully usable."""
-
-    def __init__(self, parent, steps, on_done=None):
-        super().__init__(parent)
-        self._steps = steps
-        self._idx = 0
-        self._on_done = on_done
-        self.setGeometry(0, 0, parent.width(), parent.height())
-        self.setStyleSheet("background: rgba(8, 10, 24, 205);")
-
-        self._card = QWidget(self)
-        self._card.setStyleSheet(
-            "background:#12142b; border:1px solid #2b2f55; border-radius:12px;")
-        cl = QVBoxLayout(self._card)
-        cl.setContentsMargins(16, 16, 16, 14)
-        cl.setSpacing(12)
-        self._label = QLabel("", self._card)
-        self._label.setWordWrap(True)
-        self._label.setStyleSheet(
-            "color:#eef; font-size:12px; background:transparent; border:none;")
-        cl.addWidget(self._label)
-        self._btn = QPushButton("", self._card)
-        self._btn.setStyleSheet(
-            "QPushButton{background:#00d9ff;color:#08122a;border:none;border-radius:6px;"
-            "padding:7px 14px;font-weight:bold;} QPushButton:hover{background:#33e2ff;}")
-        self._btn.clicked.connect(self._advance)
-        cl.addWidget(self._btn, alignment=Qt.AlignmentFlag.AlignRight)
-        self._card.setFixedWidth(min(330, max(200, self.width() - 24)))
-        self._render()
-        self.show()
-        self.raise_()
-
-    def _render(self):
-        text, is_last = self._steps[self._idx]
-        self._label.setText(text)
-        self._btn.setText("Got it!" if is_last else "Next →")
-        self._card.adjustSize()
-        cx = (self.width() - self._card.width()) // 2
-        cy = (self.height() - self._card.height()) // 2
-        self._card.move(max(6, cx), max(6, cy))
-
-    def _advance(self):
-        self._idx += 1
-        if self._idx >= len(self._steps):
-            if self._on_done:
-                try:
-                    self._on_done()
-                except Exception:
-                    pass
-            self.close()
-            self.deleteLater()
-            return
-        self._render()
-
-    def resizeEvent(self, event):
-        try:
-            self.setGeometry(0, 0, self.parent().width(), self.parent().height())
-            self._card.setFixedWidth(min(330, max(200, self.width() - 24)))
-            self._render()
-        except Exception:
-            pass
-
-
 class VisualizerWindow(QMainWindow):
-    device_error = pyqtSignal(str)
-    device_success = pyqtSignal(str)
+    device_error = Signal(str)
+    device_success = Signal(str)
     
     def __init__(self, config):
         super().__init__()
@@ -385,6 +322,7 @@ class VisualizerWindow(QMainWindow):
         self.last_beat_time = 0
         self.current_bpm = 120
         
+        self.player = None
         self.init_ui()
         self.device_success.connect(lambda message: self.update_device_status(message, "active"))
         self.device_error.connect(lambda message: self.update_device_status(message, "error"))
@@ -403,40 +341,18 @@ class VisualizerWindow(QMainWindow):
         self.write_state_file()
 
     def show_intro_tour(self):
-        """First-run walkthrough over the visualizer (menu button + options)."""
-        try:
-            if getattr(self, '_tour_overlay', None) is not None:
-                return
-            steps = [
-                ("👋  Welcome to the GGF Toolbar!\n\n"
-                 "It lives in your system tray and puts AI apps, media tools, and "
-                 "utilities one click away. (This music visualizer is just one of "
-                 "its features — it's what's loading right now.)", False),
-                ("Click the “Menu” button in the bottom-right corner to open the "
-                 "toolbar — the same menu you get by right-clicking the GGF tray "
-                 "icon:\n\n"
-                 "•  Search & install AI apps\n"
-                 "•  Convert images, audio & video\n"
-                 "•  Utilities, settings & this visualizer", False),
-                ("That’s the tour!  The GGF Toolbar is always in your system "
-                 "tray — right-click its icon anytime for everything.", True),
-            ]
+        from ggf_welcome import Guide
+        if getattr(self, "_guide", None) is None:
+            self._guide = Guide(self, music=True)
+            self._guide.finished.connect(self._finish_guide)
+            self._guide.show()
+        self._guide.raise_()
+        self._guide.activateWindow()
 
-            def _done():
-                self._tour_overlay = None
-                self._mark_tour_seen()
-
-            self._tour_overlay = TourOverlay(self, steps, on_done=_done)
-        except Exception as e:
-            log_visualizer(f"Intro tour failed: {e}")
-
-    def _mark_tour_seen(self):
-        try:
-            self.config['tourSeen'] = True
-            with open(CONFIG_PATH, 'w') as f:
-                json.dump(self.config, f, indent=2)
-        except Exception:
-            pass
+    def _finish_guide(self, result):
+        self._guide = None
+        self.config["visualizerGuideSeen"] = True
+        self._save_config_quiet()
 
     def init_ui(self):
         self.setWindowTitle("Music Visualizer")
@@ -528,9 +444,13 @@ class VisualizerWindow(QMainWindow):
         if hasattr(self, 'menu_btn'):
             self.menu_btn.move(self.width() - 64, self.height() - 40)
     
+    def open_player(self):
+        if self.player is None: self.player = MusicPlayer(self)
+        self.player.show(); self.player.raise_(); self.player.activateWindow()
+
     def show_context_menu(self, pos):
         """Simple right-click menu - main controls are in tray"""
-        from PyQt6.QtWidgets import QMenu
+        from PySide6.QtWidgets import QMenu
         menu = QMenu(self)
         
         # Show current mode
@@ -558,9 +478,10 @@ class VisualizerWindow(QMainWindow):
         self.toggle_click_through(new_state)
 
     def build_controls_menu(self):
-        from PyQt6.QtWidgets import QMenu
+        from PySide6.QtWidgets import QMenu
         menu = QMenu(self)
 
+        menu.addAction("Music Player…").triggered.connect(self.open_player)
         mode_menu = menu.addMenu("Visual Mode")
         mode_names = ["Spark Fountain", "Radial Burst", "Equalizer Bars", "Spiral Vortex", "Traveling Wave", "Flower Bloom", "Psychedelic Face"]
         current_mode = self.config.get('visualMode', 0)
@@ -657,7 +578,7 @@ class VisualizerWindow(QMainWindow):
         return shortcuts
 
     def show_status_message(self, title, message):
-        from PyQt6.QtWidgets import QMessageBox
+        from PySide6.QtWidgets import QMessageBox
         box = QMessageBox(self)
         box.setWindowTitle(title)
         box.setText(message)
@@ -666,7 +587,7 @@ class VisualizerWindow(QMainWindow):
         box.exec()
 
     def build_tray_menu(self):
-        from PyQt6.QtWidgets import QMenu
+        from PySide6.QtWidgets import QMenu
 
         menu = QMenu(self)
         shortcuts = self.load_tray_shortcuts()
@@ -710,6 +631,7 @@ class VisualizerWindow(QMainWindow):
             ("Convert to WAV", "convert_wav"),
             ("Convert to MP3", "convert_mp3"),
             ("Convert to AAC", "convert_aac"),
+            ("Convert to M4A", "convert_m4a"),
             ("Convert to FLAC", "convert_flac"),
             ("Convert to OGG", "convert_ogg"),
         ]:
@@ -729,7 +651,11 @@ class VisualizerWindow(QMainWindow):
             action = video_menu.addAction(label)
             action.triggered.connect(lambda checked=False, tray_action=action_name: self.run_tray_command("menu_action", action=tray_action))
 
+        music = menu.addAction("Music Player…")
+        music.triggered.connect(self.open_player)
         visualizer_menu = menu.addMenu("Music Visualizer")
+        guide_action = visualizer_menu.addAction("Visualizer guide…")
+        guide_action.triggered.connect(self.show_intro_tour)
         start_action = visualizer_menu.addAction("Start Visualizer")
         start_action.triggered.connect(lambda: self.run_tray_command("menu_action", action="audio_visualizer"))
         click_label = "Click Through Off" if self.click_through_mode else "Click Through"
@@ -737,6 +663,8 @@ class VisualizerWindow(QMainWindow):
         click_action.triggered.connect(lambda: self.run_tray_command("toggle_click_through"))
 
         utility_menu = menu.addMenu("Utility")
+        resources = utility_menu.addAction("GGF Resource Search (members)")
+        resources.triggered.connect(lambda: self.run_tray_command("menu_action", action="resources"))
         hf_action = utility_menu.addAction("HuggingFace Model Browser")
         hf_action.triggered.connect(lambda: self.run_tray_command("menu_action", action="huggingface_browser"))
         utility_menu.addSeparator()
@@ -745,6 +673,13 @@ class VisualizerWindow(QMainWindow):
 
         menu.addSeparator()
 
+        welcome_action = menu.addAction("Welcome tour…")
+        welcome_action.triggered.connect(lambda: self.run_tray_command("menu_action", action="show_tour"))
+        from ggf_startup import is_registered
+        startup_action = menu.addAction("Start silently with Windows")
+        startup_action.setCheckable(True)
+        startup_action.setChecked(is_registered())
+        startup_action.triggered.connect(lambda: self.run_tray_command("menu_action", action="startup_toggle"))
         website_action = menu.addAction("Member Site")
         website_action.triggered.connect(lambda: self.run_tray_command("open_website"))
         login_action = menu.addAction("Login / Logout")
@@ -761,10 +696,15 @@ class VisualizerWindow(QMainWindow):
         menu_pos = self.menu_btn.mapToGlobal(QPoint(0, -menu.sizeHint().height()))
         menu.exec(menu_pos)
     
+    def open_player(self):
+        if self.player is None: self.player = MusicPlayer(self)
+        self.player.show(); self.player.raise_(); self.player.activateWindow()
+
     def show_context_menu(self, pos):
-        from PyQt6.QtWidgets import QMenu
+        from PySide6.QtWidgets import QMenu
         menu = QMenu(self)
         
+        menu.addAction("Music Player…").triggered.connect(self.open_player)
         mode_menu = menu.addMenu("Visual Mode")
         
         mode_names = ["Spark Fountain", "Radial Burst", "Equalizer Bars", "Spiral Vortex", "Traveling Wave", "Flower Bloom", "Psychedelic Face"]
@@ -2219,8 +2159,8 @@ animate();
             self.audio_thread.join(timeout=2)
         
         self.audio_queue = queue.Queue()
-        self.audio_stop_event.clear()
-        self.audio_thread = threading.Thread(target=self.audio_capture_thread, daemon=True)
+        self.audio_stop_event = threading.Event()
+        self.audio_thread = threading.Thread(target=self.audio_capture_thread, args=(self.audio_stop_event,self.selected_device_index), daemon=True)
         self.audio_thread.start()
         self.device_working = True
         log_visualizer(f"Started audio capture thread for device index={self.selected_device_index}")
@@ -2327,12 +2267,12 @@ animate();
             'bpm': self.current_bpm
         }
         
-    def audio_capture_thread(self):
+    def audio_capture_thread(self, stop, index):
         stream = None
         p = None
         try:
             p = pyaudio.PyAudio()
-            device_info = p.get_device_info_by_index(self.selected_device_index)
+            device_info = p.get_device_info_by_index(index)
             log_visualizer(f"Opening audio capture stream for {device_info.get('name')} ({device_info.get('index')})")
             
             CHANNELS = int(device_info["maxInputChannels"])
@@ -2359,7 +2299,7 @@ animate();
             
             frame_count = 0
             
-            while not self.audio_stop_event.is_set():
+            while not stop.is_set():
                 try:
                     frame_count += 1
                     data = stream.read(CHUNK, exception_on_overflow=False)
@@ -2376,13 +2316,17 @@ animate();
                         self.audio_data = levels
                     
                 except Exception as e:
-                    if not self.audio_stop_event.is_set():
+                    if not stop.is_set():
                         log_visualizer(f"Audio stream read error: {e}")
-                        continue
+                        self.device_error.emit("Audio device disconnected. Select a device in Settings.")
+                        self.device_working=False
+                        break
                     else:
                         break
                     
         except Exception as exc:
+            self.device_working=False
+            self.device_error.emit("Audio capture unavailable. Choose an output device in Settings.")
             log_visualizer(f"Audio capture startup failed: {exc}")
         finally:
             if stream:
@@ -2557,6 +2501,8 @@ animate();
                     state = json.load(f)
                 
                 # Check for command
+                if state.get('command') == 'open_player': self.open_player()
+                if state.get('command') == 'tour': self.show_intro_tour()
                 if 'command' in state and state['command'] == 'toggle_click_through':
                     enabled = state.get('enabled', False)
                     self.toggle_click_through(enabled)
@@ -2615,15 +2561,19 @@ def main():
         return 0
     
     app = QApplication(sys.argv)
+    from PySide6.QtGui import QIcon
+    from ggf_runtime import get_resource_dir
+    app.setWindowIcon(QIcon(os.path.join(get_resource_dir(), "ggf-mark.ico")))
     # Only an explicit Quit (or the visualizer's own close) should end the app --
     # closing a child window like Settings must never quit the whole visualizer.
     app.setQuitOnLastWindowClosed(False)
     config = load_config()
     window = VisualizerWindow(config)
     window.show()
+    if "--music" in sys.argv: QTimer.singleShot(0,window.open_player)
     # First time the visualizer opens (or when launched with --tour), run the
     # short intro walkthrough once, after the window has settled.
-    if ("--tour" in sys.argv) or (not config.get("tourSeen")):
+    if ("--tour" in sys.argv) or (not (config.get("visualizerGuideSeen") or config.get("tourSeen"))):
         QTimer.singleShot(1100, window.show_intro_tour)
     return app.exec()
 

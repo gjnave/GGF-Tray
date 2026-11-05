@@ -15,7 +15,7 @@ import subprocess
 import tempfile
 import time
 import zipfile
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PureWindowsPath
 
 
 MAX_ARCHIVE_FILES = 20_000
@@ -31,8 +31,8 @@ WINDOWS_RESERVED_NAMES = {
 }
 
 
-class InstallSafetyError(RuntimeError):
-    """Raised when an archive or destination fails a safety check."""
+from ggf_packages import PackageError as InstallSafetyError, extract as extract_archive, reparse
+safe_extract_zip = extract_archive
 
 
 def _commonpath_is_child(path: str, parent: str) -> bool:
@@ -49,9 +49,9 @@ def sanitize_folder_name(value: str) -> str:
     name = re.sub(r"\s+", " ", name).strip().strip(". ")
     if not name or name in {".", ".."}:
         raise InstallSafetyError("Choose a non-empty app folder name.")
-    if name.casefold() in WINDOWS_RESERVED_NAMES:
+    if PureWindowsPath(name).is_reserved():
         raise InstallSafetyError(f"'{name}' is a reserved Windows folder name.")
-    return name[:96]
+    return name[:96].rstrip(". ")
 
 
 def safe_install_path(base_dir: str, folder_name: str) -> str:
@@ -62,174 +62,33 @@ def safe_install_path(base_dir: str, folder_name: str) -> str:
     return target
 
 
-def _safe_member_parts(member_name: str) -> tuple[str, ...]:
-    raw = (member_name or "").replace("\\", "/")
-    if not raw or "\x00" in raw or raw.startswith("/") or re.match(r"^[A-Za-z]:", raw):
-        raise InstallSafetyError(f"Unsafe archive path: {member_name!r}")
-    parts = tuple(part for part in PurePosixPath(raw).parts if part not in {"", "."})
-    if not parts or any(part == ".." for part in parts):
-        raise InstallSafetyError(f"Unsafe archive path: {member_name!r}")
-    return parts
-
-
-def _safe_member_target(destination: str, member_name: str) -> str:
-    target = os.path.abspath(os.path.join(destination, *_safe_member_parts(member_name)))
-    if not _commonpath_is_child(target, destination):
-        raise InstallSafetyError(f"Archive entry escapes the install folder: {member_name!r}")
-    return target
-
-
-def safe_extract_zip(archive_path: str, destination: str) -> tuple[int, int]:
-    """Extract ZIP without Zip Slip, symlinks, or unbounded expansion."""
-    with zipfile.ZipFile(archive_path, "r") as archive:
-        members = archive.infolist()
-        if len(members) > MAX_ARCHIVE_FILES:
-            raise InstallSafetyError(f"Archive contains too many files ({len(members):,}).")
-        total_size = sum(max(0, int(item.file_size)) for item in members)
-        if total_size > MAX_UNCOMPRESSED_BYTES:
-            raise InstallSafetyError("Archive expands beyond the 40 GiB safety limit.")
-
-        planned = []
-        for item in members:
-            unix_mode = (item.external_attr >> 16) & 0o170000
-            if unix_mode == 0o120000:
-                raise InstallSafetyError(f"Archive contains a symbolic link: {item.filename}")
-            planned.append((item, _safe_member_target(destination, item.filename)))
-
-        for item, target in planned:
-            if item.is_dir() or item.filename.endswith(("/", "\\")):
-                os.makedirs(target, exist_ok=True)
-                continue
-            os.makedirs(os.path.dirname(target), exist_ok=True)
-            with archive.open(item, "r") as source, open(target, "wb") as output:
-                shutil.copyfileobj(source, output, length=1024 * 1024)
-    return len(members), total_size
-
-
-def safe_extract_external(archive_path: str, destination: str) -> tuple[int, int]:
-    """Validate and extract RAR/7z with Windows bsdtar when available."""
-    tar_exe = shutil.which("tar")
-    if not tar_exe:
-        raise InstallSafetyError("Windows archive support was not found. Re-download this app as ZIP.")
-    listing = subprocess.run(
-        [tar_exe, "-tf", archive_path], capture_output=True, text=True, timeout=120,
-        encoding="utf-8", errors="replace",
-    )
-    if listing.returncode != 0:
-        raise InstallSafetyError("This RAR/7z file could not be safely inspected. Re-download it as ZIP.")
-    names = [line.strip() for line in listing.stdout.splitlines() if line.strip()]
-    if len(names) > MAX_ARCHIVE_FILES:
-        raise InstallSafetyError(f"Archive contains too many files ({len(names):,}).")
-    for name in names:
-        _safe_member_target(destination, name)
-    verbose = subprocess.run(
-        [tar_exe, "-tvf", archive_path], capture_output=True, text=True, timeout=120,
-        encoding="utf-8", errors="replace",
-    )
-    if verbose.returncode != 0:
-        raise InstallSafetyError("This RAR/7z file could not be safely inspected. Re-download it as ZIP.")
-    total_size = 0
-    for line in verbose.stdout.splitlines():
-        if not line.strip():
-            continue
-        entry_type = line.lstrip()[:1].casefold()
-        if entry_type in {"l", "h"}:
-            raise InstallSafetyError("Archive links are not allowed in an automatic GGF installation.")
-        size_match = re.match(r"^\S+\s+\d+\s+\S+\s+\S+\s+(\d+)\s+", line.lstrip())
-        if not size_match:
-            raise InstallSafetyError("Archive sizes could not be verified. Re-download this app as ZIP.")
-        total_size += int(size_match.group(1))
-        if total_size > MAX_UNCOMPRESSED_BYTES:
-            raise InstallSafetyError("Archive expands beyond the 40 GiB safety limit.")
-    free_space = shutil.disk_usage(destination).free
-    if free_space < total_size + 512 * 1024 * 1024:
-        raise InstallSafetyError("There is not enough verified free space to safely extract this archive.")
-    result = subprocess.run(
-        [tar_exe, "-xf", archive_path, "-C", destination],
-        capture_output=True, text=True, timeout=3600,
-        encoding="utf-8", errors="replace",
-    )
-    if result.returncode != 0:
-        raise InstallSafetyError(f"Archive extraction failed: {result.stderr.strip()[:300]}")
-    return len(names), total_size
-
-
-def extract_archive(archive_path: str, destination: str) -> tuple[int, int | None]:
-    extension = os.path.splitext(archive_path)[1].lower()
-    if extension == ".zip":
-        return safe_extract_zip(archive_path, destination)
-    if extension in {".rar", ".7z"}:
-        return safe_extract_external(archive_path, destination)
-    raise InstallSafetyError(f"Unsupported archive type: {extension or '(none)'}")
-
-
-def _walk_candidates(install_dir: str):
-    for root, dirs, files in os.walk(install_dir):
-        dirs[:] = [directory for directory in dirs if directory.casefold() not in SKIP_SCAN_DIRS]
-        relative_root = os.path.relpath(root, install_dir)
-        depth = 0 if relative_root == "." else len(Path(relative_root).parts)
-        if depth > 5:
-            dirs[:] = []
-            continue
-        for filename in files:
-            yield os.path.join(root, filename), depth
-
-
 def discover_install_files(install_dir: str) -> dict:
-    """Return candidates plus only high-confidence automatic selections."""
-    installers = []
-    launchers = []
-    executables = []
-    for path, depth in _walk_candidates(install_dir):
-        name = os.path.basename(path).casefold()
-        ext = os.path.splitext(name)[1]
-        if ext not in {".bat", ".cmd", ".exe"}:
-            continue
-        if "uninstall" in name or name.startswith("unins"):
-            continue
-        if ext == ".exe":
-            executables.append(path)
-        if any(word in name for word in ("install", "setup")):
-            installers.append((path, depth))
-        elif any(word in name for word in ("run", "start", "launch")):
-            launchers.append((path, depth))
-
-    def unique_best(candidates, preferred_names):
-        ranked = []
-        for path, depth in candidates:
-            name = os.path.basename(path).casefold()
-            try:
-                name_rank = preferred_names.index(name)
-            except ValueError:
-                name_rank = len(preferred_names) + 10
-            ranked.append(((name_rank, depth, len(path)), path))
-        ranked.sort(key=lambda pair: pair[0])
-        if not ranked:
-            return None
-        if len(ranked) == 1 or ranked[0][0] < ranked[1][0]:
-            return ranked[0][1]
-        return None
-
-    best_installer = unique_best(
-        installers,
-        ["install.bat", "install.cmd", "setup.bat", "setup.cmd", "installer.exe", "setup.exe"],
-    )
-    best_launcher = unique_best(
-        launchers,
-        ["run.bat", "run.cmd", "start.bat", "start.cmd", "launch.bat", "launch.cmd"],
-    )
-    if not best_launcher:
-        portable = [path for path in executables if path != best_installer]
-        if len(portable) == 1:
-            best_launcher = portable[0]
-
-    return {
-        "installers": [path for path, _depth in installers],
-        "launchers": [path for path, _depth in launchers],
-        "executables": executables,
-        "best_installer": best_installer,
-        "best_launcher": best_launcher,
-    }
+    """Only suggest an unambiguous entry point; show other candidates for review."""
+    installers, launchers, other = [], [], []
+    skip = SKIP_SCAN_DIRS | {"scripts-deps", ".github", "python", "python_embeded", "python_embedded",
+                            "bin", "lib", "tools", "deps", "vendor", "__macosx", "tests", "build", "dist-packages"}
+    for root, dirs, files in os.walk(install_dir):
+        depth = len(Path(root).relative_to(install_dir).parts)
+        dirs[:] = sorted(d for d in dirs if depth < 5 and d.casefold() not in skip and not reparse(os.path.join(root,d)))
+        for file in sorted(files):
+            path = os.path.join(root, file)
+            name, ext = os.path.splitext(file.lower())
+            if ext not in {".exe",".bat",".cmd"} or reparse(path): continue
+            words = set(re.findall(r"[a-z]+", name))
+            if words & {"uninstall","remove","reset","cleanup","repair","doctor","update","upgrade","configure","debug",
+                        "test","uninstaller","helper","frozen","ffmpeg","ffprobe","aria","python","git","uv","pip"} or name.startswith("unins"):
+                continue
+            if words & {"install","installer","setup"}: installers.append((depth,path))
+            elif words & {"run","start","launch","launcher"}: launchers.append((depth,path))
+            else: other.append((depth,path))
+    def best(group):
+        if group:
+            top = [path for depth,path in group if depth == min(d for d,_ in group)]
+            return top[0] if len(top)==1 else None
+    manual = sorted(path for _,path in other)
+    standalone = best(other) if not installers and not launchers and len(other)==1 else None
+    return {"installers":[v for _,v in installers], "launchers":[v for _,v in launchers],
+            "executables":manual, "best_installer":best(installers), "best_launcher":best(launchers) or standalone}
 
 
 def load_registry(path: str) -> dict[str, tuple[str, str | None]]:
@@ -310,4 +169,11 @@ def validate_delete_target(path: str, app_dir: str) -> tuple[bool, str, bool]:
     if len(Path(tail).parts) < 3:
         return False, "The registered path is too close to the drive root to remove safely.", False
     marker_path = os.path.join(target, MARKER_NAME)
-    return True, "", os.path.isfile(marker_path)
+    if any(reparse(node) for node in (Path(target), *Path(target).parents)):
+        return False, "Cannot remove a linked folder or its contents.", False
+    try:
+        with open(marker_path, encoding="utf-8") as marker:
+            owned = os.path.normcase(json.load(marker)["install_dir"]) == os.path.normcase(target)
+    except (ValueError, OSError, KeyError, TypeError):
+        owned = False
+    return True, "", owned

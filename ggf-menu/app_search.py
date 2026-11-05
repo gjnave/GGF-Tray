@@ -1,903 +1,309 @@
-"""
-GGF App Search - Standalone PyQt6 Application
-Searches and downloads tools from getgoingfast.pro
-"""
-import sys
+"""Browse the first-party catalog, link a GGF account and hand packages to setup."""
+import hashlib
 import os
-import json
-import urllib.request
-import urllib.parse
-import webbrowser
-import zipfile
-import tempfile
-import shutil
-import threading
-import time
 import subprocess
-import re
-from PyQt6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout,
-                             QLineEdit, QComboBox, QListWidget, QLabel, 
-                             QPushButton, QListWidgetItem, QProgressBar, QMessageBox)
-from PyQt6.QtCore import Qt, QTimer, QUrl, QThread, pyqtSignal
-from ggf_runtime import (
-    configure_ssl_environment,
-    get_state_dir,
-    launch_console_command,
-    redact_secrets,
-    urlopen_with_ssl,
-)
+import sys
+import time
+import webbrowser
+from pathlib import Path
+from urllib.parse import urljoin,urlsplit
+from PySide6.QtCore import QEvent,Qt,QThread,QTimer,Signal
+from PySide6.QtWidgets import (QApplication,QWidget,QVBoxLayout,QHBoxLayout,QLabel,QLineEdit,QComboBox,
+    QListWidget,QListWidgetItem,QPushButton,QProgressBar,QMessageBox,QInputDialog,QFileDialog)
+from ggf_auth_token import AuthManager
+from ggf_catalog import catalog,fetch,Variants,membership_allows_download,ORIGIN
+from ggf_runtime import get_state_dir,get_app_dir,redact_secrets
 
-# --- Logging ---
-import datetime
-
-
-def get_app_dir():
-    if getattr(sys, 'frozen', False):
-        return os.path.dirname(sys.executable)
-    return os.path.dirname(os.path.abspath(__file__))
-
-
-def get_subprocess_env():
-    env = os.environ.copy()
-    if getattr(sys, 'frozen', False):
-        env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
-    return configure_ssl_environment(env)
-
-
-APP_DIR = get_app_dir()
-STATE_DIR = get_state_dir()
-configure_ssl_environment()
-_LOG_FILE = os.path.join(STATE_DIR, 'app_search_log.txt')
-_CATALOG_CACHE = os.path.join(STATE_DIR, 'tools-list-cache.json')
-_ALLOWED_DOWNLOAD_EXTENSIONS = {'.zip', '.rar', '.7z', '.exe', '.bat', '.json', '.pptx', '.kcppt', '.safetensors'}
-
-
-def _log(msg):
-    ts = datetime.datetime.now().strftime('%H:%M:%S.%f')[:-3]
-    line = f"[{ts}] {redact_secrets(msg)}"
-    print(line)
-    try:
-        with open(_LOG_FILE, 'a', encoding='utf-8') as _f:
-            _f.write(line + '\n')
-    except:
-        pass
-
-# Clear log on startup
-try:
-    with open(_LOG_FILE, 'w', encoding='utf-8') as _f:
-        _f.write(f"=== app_search started {datetime.datetime.now()} ===\n")
-except:
-    pass
-
-from PyQt6.QtGui import QDesktopServices
-
-# Import auth manager
-try:
-    from ggf_auth_token import AuthManager
-except ImportError:
-    # If running from different directory, try to import from same directory
-    script_dir = APP_DIR
-    sys.path.insert(0, script_dir)
-    from ggf_auth_token import AuthManager
-
-# Initialize auth manager (shared instance)
-auth_manager = AuthManager()
-
-
-class DownloadWorker(QThread):
-    """Background thread for downloading files"""
-    progress = pyqtSignal(int, str)  # (percent, status_message)
-    finished = pyqtSignal(bool, str, str, str)  # (success, message, file_path, file_type)
-    
-    def __init__(self, download_url, tool_slug, app_token):
-        super().__init__()
-        self.download_url = download_url
-        self.tool_slug = tool_slug
-        self.app_token = app_token
-    
+class Worker(QThread):
+    result=Signal(object); error=Signal(str); progress=Signal(object,object)
+    def __init__(self,fn,parent):
+        super().__init__(parent);self.fn=fn
     def run(self):
-        _log(f"=== DownloadWorker.run START slug={self.tool_slug} ===")
-        _log(f"download_url = {self.download_url}")
-        temp_dir = None
-        try:
-            temp_dir = tempfile.mkdtemp()
-            _log(f"temp_dir = {temp_dir}")
-            self.progress.emit(0, "Starting download...")
+        try: result=self.fn(self)
+        except Exception as exc: self.error.emit(redact_secrets(exc));return
+        self.result.emit(result)
 
-            # Single request - read header AND body from same connection
-            _log("Opening URL connection...")
-            req = urllib.request.Request(self.download_url, headers={
-                'User-Agent': 'GGF-AppSearch/0.12',
-                'X-GGF-App-Token': self.app_token,
-                'Cache-Control': 'no-store',
-            })
-            response = urlopen_with_ssl(req, timeout=60)
-            _log(f"Response status: {response.status}")
-            _log(f"Response URL (after redirects): {response.url}")
+def start_setup(path):
+    args=[sys.executable]
+    if not getattr(sys,"frozen",False): args.append(str(Path(get_app_dir())/"ggf-tray.py"))
+    env=os.environ.copy();env["PYINSTALLER_RESET_ENVIRONMENT"]="1"
+    subprocess.Popen(args+["--install-zip",str(path)],env=env,cwd=get_app_dir())
 
-            content_disposition = response.headers.get('Content-Disposition', '')
-            content_type = response.headers.get('Content-Type', '')
-            content_length = response.headers.get('Content-Length', 'unknown')
-            _log(f"Content-Disposition: {repr(content_disposition)}")
-            _log(f"Content-Type: {content_type}")
-            _log(f"Content-Length: {content_length}")
-
-            actual_filename = response.headers.get_filename() or f"{self.tool_slug}.zip"
-            actual_filename = os.path.basename(actual_filename.replace('\\', '/')).strip().strip('. ')
-            actual_filename = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', actual_filename)
-            if not actual_filename:
-                raise RuntimeError("The server did not provide a safe filename.")
-            file_ext = os.path.splitext(actual_filename)[1].lower()
-            if file_ext not in _ALLOWED_DOWNLOAD_EXTENSIONS:
-                raise RuntimeError(f"The server returned an unsupported file type: {file_ext or '(none)'}")
-            _log(f"Filename from server: {actual_filename}")
-
-            file_path = os.path.join(temp_dir, actual_filename)
-            _log(f"Writing to: {file_path}")
-
-            total_size = int(response.headers.get('Content-Length', 0) or 0)
-            if total_size > 40 * 1024 * 1024 * 1024:
-                raise RuntimeError("The download is larger than the 40 GiB safety limit.")
-            downloaded = 0
-            chunk_size = 8192
-            with open(file_path, 'wb') as f:
-                while True:
-                    chunk = response.read(chunk_size)
-                    if not chunk:
-                        break
-                    f.write(chunk)
-                    downloaded += len(chunk)
-                    if downloaded > 40 * 1024 * 1024 * 1024:
-                        raise RuntimeError("The download exceeded the 40 GiB safety limit.")
-                    if total_size > 0:
-                        pct = min(100, int(downloaded * 100 / total_size))
-                        self.progress.emit(pct, f"Downloading... {pct}%")
-                    else:
-                        kb = downloaded // 1024
-                        self.progress.emit(50, f"Downloading... {kb} KB")
-
-            _log(f"Download complete. Total bytes written: {downloaded}")
-            actual_size = os.path.getsize(file_path)
-            _log(f"File size on disk: {actual_size}")
-
-            # Peek at first bytes to detect if server returned error HTML instead of file
-            with open(file_path, 'rb') as f:
-                head = f.read(200)
-            _log(f"File signature: {head[:16].hex()}")
-            if head.strip().lower().startswith(b'<!doctype') or head.strip().lower().startswith(b'<html'):
-                raise RuntimeError("The server returned a web page instead of an installer file.")
-            if downloaded == 0:
-                raise RuntimeError("The server returned an empty file.")
-
-            if file_ext == '.zip' and not zipfile.is_zipfile(file_path):
-                raise RuntimeError("The downloaded file is named ZIP but is not a valid ZIP archive.")
-            _log(f"file_ext = {file_ext}")
-            self.progress.emit(100, "Download complete!")
-            _log("Emitting finished(True)")
-            self.finished.emit(True, "Download complete", file_path, file_ext)
-
-        except urllib.error.HTTPError as e:
-            body = ""
-            try: body = e.read(500).decode('utf-8', errors='replace')
-            except: pass
-            _log(f"HTTPError: code={e.code} reason={e.reason}")
-            _log(f"Error headers: {dict(e.headers) if hasattr(e,'headers') else 'n/a'}")
-            _log(f"Error body (first 500): {body}")
-            if temp_dir:
-                shutil.rmtree(temp_dir, ignore_errors=True)
-            self.finished.emit(False, f"Download failed: HTTP {e.code} {e.reason}\n\nServer said:\n{body[:300]}", "", "")
-        except Exception as e:
-            import traceback
-            _log(f"Exception: {type(e).__name__}: {e}")
-            _log(traceback.format_exc())
-            if temp_dir:
-                shutil.rmtree(temp_dir, ignore_errors=True)
-            self.finished.emit(False, f"Download failed:\n{str(e)}", "", "")
-
-
-def membership_allows_download(user_tier, membership_code):
-    """Mirror the server's explicit catalog-code access rules."""
-    required_levels = {'free': 0, 'pd': 1, 'fh': 2}
-    user_levels = {'free': 0, 'prairie-dog': 1, 'farm-hand': 2, 'rancher': 2, 'gunslinger': 2}
-    if membership_code == 'fs':  # For Sale: requires the website purchase flow.
-        return False
-    return user_levels.get(user_tier, 0) >= required_levels.get(membership_code, 99)
-
-
-def unique_destination(directory, filename):
-    stem, extension = os.path.splitext(filename)
-    candidate = os.path.join(directory, filename)
-    counter = 2
-    while os.path.exists(candidate):
-        candidate = os.path.join(directory, f"{stem}-{counter}{extension}")
-        counter += 1
-    return candidate
-
-
-class LoginPoller(QThread):
-    """Background thread for polling login status"""
-    success = pyqtSignal(dict)
-    failed = pyqtSignal()
-    
-    def __init__(self, token, auth_manager):
-        super().__init__()
-        self.token = token
-        self.auth_manager = auth_manager
-    
-    def run(self):
-        result = self.auth_manager.poll_for_auth(self.token, timeout=120, interval=2)
-        if result:
-            self.success.emit(result)
-        else:
-            self.failed.emit()
+from PySide6.QtGui import QIcon
+from ggf_runtime import get_resource_dir
+from ggf_catalog_window import CatalogOwner, activate_existing
+from ggf_welcome import Guide, welcome_seen, remember_welcome
 
 
 class SearchDialog(QWidget):
-    """Main search dialog window"""
-    
+    LINK_WINDOW = 20 * 60  # Allow time to receive and use a website login email.
+    LINK_HELP = ("Sign in on the website, match the code, then choose Link Desktop App. "
+                 "Already signed in somewhere else? Choose Continue in browser.")
+
     def __init__(self):
         super().__init__()
-        self.tools_data = []
-        self.url_mapping = {}
-        self.current_selection = None
-        self.download_worker = None
-        self.login_poller = None
-        self.init_ui()
-        QTimer.singleShot(100, self.load_tools)
-    
-    def init_ui(self):
-        self.setWindowTitle("GGF App Search")
-        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | 
-                           Qt.WindowType.WindowStaysOnTopHint |
-                           Qt.WindowType.Tool)
-        
-        # Position above taskbar in bottom-right
-        screen = QApplication.primaryScreen().geometry()
-        width = 450
-        height = 480
-        x = screen.width() - width - 10
-        y = screen.height() - height - 50
-        self.setGeometry(x, y, width, height)
-        
-        # Main layout
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(8)
-        
-        # Set background
-        self.setStyleSheet("""
-            QWidget {
-                background-color: #2b2b2b;
-                color: white;
-            }
-        """)
-        
-        # Auth header (tier display)
-        if auth_manager and auth_manager.is_authenticated():
-            tier_name = auth_manager.format_tier_name()
-            user_name = auth_manager.get_name()
-            self.auth_header = QLabel(f"Access: {tier_name} - {user_name}")
-            self.auth_header.setStyleSheet("""
-                QLabel {
-                    background-color: #4a90e2;
-                    color: white;
-                    font-weight: bold;
-                    padding: 8px;
-                    border-radius: 4px;
-                }
-            """)
-        else:
-            self.auth_header = QLabel("Not logged in")
-            self.auth_header.setStyleSheet("""
-                QLabel {
-                    background-color: #666;
-                    color: white;
-                    font-weight: bold;
-                    padding: 8px;
-                    border-radius: 4px;
-                }
-            """)
-        
-        auth_layout = QHBoxLayout()
-        auth_layout.addWidget(self.auth_header, 1)
-        self.login_btn = None
-        
-        # Login button if not authenticated
-        if not (auth_manager and auth_manager.is_authenticated()):
-            self.login_btn = QPushButton("Login to GGF")
-            self.login_btn.setStyleSheet("""
-                QPushButton {
-                    background-color: #FF424D;
-                    color: white;
-                    border: none;
-                    border-radius: 4px;
-                    padding: 8px 12px;
-                    font-weight: bold;
-                }
-                QPushButton:hover {
-                    background-color: #E0383F;
-                }
-            """)
-            self.login_btn.clicked.connect(self.open_login)
-            auth_layout.addWidget(self.login_btn)
-        
-        layout.addLayout(auth_layout)
-        
-        # Title
-        title = QLabel("Search Apps")
-        title.setStyleSheet("font-size: 14px; font-weight: bold; padding: 5px;")
-        layout.addWidget(title)
-        
-        # Search row
-        search_layout = QHBoxLayout()
-        self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("Search by name")
-        self.search_input.setStyleSheet("""
-            QLineEdit {
-                background-color: #3b3b3b;
-                color: white;
-                border: 1px solid #555;
-                border-radius: 4px;
-                padding: 6px;
-            }
-        """)
-        self.search_input.textChanged.connect(self.filter_results)
-        search_layout.addWidget(self.search_input, 2)
-        
-        # Type filter
-        self.type_filter = QComboBox()
-        self.type_filter.addItem("Type (all)", "")
-        self.type_filter.setStyleSheet("""
-            QComboBox {
-                background-color: #3b3b3b;
-                color: white;
-                border: 1px solid #555;
-                border-radius: 4px;
-                padding: 6px;
-            }
-            QComboBox::drop-down { border: none; }
-            QComboBox QAbstractItemView {
-                background-color: #3b3b3b;
-                color: white;
-                selection-background-color: #4a90e2;
-            }
-        """)
-        self.type_filter.currentTextChanged.connect(self.filter_results)
-        search_layout.addWidget(self.type_filter, 1)
-        
-        layout.addLayout(search_layout)
-        
-        # Results list
-        self.results_list = QListWidget()
-        self.results_list.setStyleSheet("""
-            QListWidget {
-                background-color: #3b3b3b;
-                color: white;
-                border: 1px solid #555;
-                border-radius: 4px;
-                padding: 4px;
-            }
-            QListWidget::item {
-                padding: 8px;
-                border-bottom: 1px solid #444;
-            }
-            QListWidget::item:hover {
-                background-color: #4a4a4a;
-            }
-            QListWidget::item:selected {
-                background-color: #4a90e2;
-            }
-        """)
-        self.results_list.itemSelectionChanged.connect(self.on_selection_changed)
-        self.results_list.itemDoubleClicked.connect(self.open_app_url)
-        # self.results_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        # self.results_list.customContextMenuRequested.connect(self.show_app_context_menu)
-        layout.addWidget(self.results_list)
-        
-        # Selected item info panel (for download button)
-        self.selection_panel = QWidget()
-        selection_layout = QHBoxLayout(self.selection_panel)
-        selection_layout.setContentsMargins(0, 0, 0, 0)
-        
-        self.selection_label = QLabel("")
-        self.selection_label.setStyleSheet("color: #aaa; font-size: 11px;")
-        selection_layout.addWidget(self.selection_label, 1)
-        
-        self.download_btn = QPushButton("Download & Install")
-        self.download_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #FF9800;
-                color: white;
-                border: none;
-                border-radius: 4px;
-                padding: 6px 12px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #F57C00;
-            }
-            QPushButton:disabled {
-                background-color: #555;
-                color: #888;
-            }
-        """)
-        self.download_btn.clicked.connect(self.download_selected)
-        self.download_btn.hide()
-        selection_layout.addWidget(self.download_btn)
-        
-        layout.addWidget(self.selection_panel)
-        
-        # Progress bar (hidden by default)
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setStyleSheet("""
-            QProgressBar {
-                background-color: #3b3b3b;
-                border: 1px solid #555;
-                border-radius: 4px;
-                text-align: center;
-                color: white;
-            }
-            QProgressBar::chunk {
-                background-color: #4CAF50;
-            }
-        """)
-        self.progress_bar.hide()
-        layout.addWidget(self.progress_bar)
-        
-        # Status label
-        self.status_label = QLabel("Loading tools...")
-        self.status_label.setStyleSheet("color: #888; font-size: 11px; padding: 4px;")
-        layout.addWidget(self.status_label)
-        
-        # Buttons row
-        btn_layout = QHBoxLayout()
-        
-        open_btn = QPushButton("Open Tool Page")
-        open_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #4CAF50;
-                color: white;
-                border: none;
-                border-radius: 4px;
-                padding: 8px 16px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #45a049;
-            }
-        """)
-        open_btn.clicked.connect(lambda: self.open_app_url(self.results_list.currentItem()))
-        btn_layout.addWidget(open_btn)
-        
-        close_btn = QPushButton("Close")
-        close_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #f44336;
-                color: white;
-                border: none;
-                border-radius: 4px;
-                padding: 8px 16px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #da190b;
-            }
-        """)
-        close_btn.clicked.connect(self.close)
-        btn_layout.addWidget(close_btn)
-        
-        layout.addLayout(btn_layout)
-    
-    def open_login(self):
-        """Open GGF login in browser and wait for validation"""
-        if not auth_manager:
+        self.guide = None
+        self.setWindowIcon(QIcon(str(Path(get_resource_dir()) / "ggf-mark.ico")))
+        self.auth=AuthManager();self.tools=[];self.jobs={};self.closing=False;self.offline=False
+        self.pending_token=None
+        self.link_timer=QTimer(self)
+        self.link_timer.setSingleShot(True)
+        self.link_timer.timeout.connect(self.check_pending)
+        self.setWindowTitle("Get Going Fast • App catalog");self.resize(680,600); self.setMinimumSize(520,400)
+        self.setStyleSheet("QWidget{background:#18202b;color:#e8edf4;font:10pt 'Segoe UI'} QLineEdit,QComboBox,QListWidget{background:#101822;border:1px solid #425267;border-radius:4px;padding:5px} QListWidget::item{padding:6px} QListWidget::item:selected{background:#294b70} QPushButton{padding:7px 12px;background:#315577;border:0;border-radius:4px} QPushButton:disabled{background:#273341;color:#8793a0} QPushButton:hover:enabled{background:#386c98}")
+        box=QVBoxLayout(self);box.setContentsMargins(16,14,16,14)
+        def row(): r=QHBoxLayout();box.addLayout(r);return r
+        top=row(); heading=QLabel("GGF App Catalog");heading.setStyleSheet("font-size:17pt;font-weight:600");top.addWidget(heading,1)
+        self.member=QLabel();top.addWidget(self.member)
+        self.link=QPushButton();self.link.clicked.connect(self.signin);top.addWidget(self.link)
+        r=row();self.link_hint=QLabel();self.link_hint.setWordWrap(True);self.link_hint.setTextFormat(Qt.TextFormat.PlainText);r.addWidget(self.link_hint,1)
+        self.stop_link=QPushButton("Cancel sign-in");self.stop_link.clicked.connect(self.cancel_link);r.addWidget(self.stop_link)
+        self.link_hint.hide();self.stop_link.hide()
+        r=row();self.search=QLineEdit();self.search.setPlaceholderText("Search names and descriptions");r.addWidget(self.search,1)
+        self.type=QComboBox();self.type.addItem("All categories","");r.addWidget(self.type)
+        self.refresh=QPushButton("Refresh");self.refresh.clicked.connect(self.reload);r.addWidget(self.refresh)
+        self.results=QListWidget();box.addWidget(self.results,1);self.results.currentItemChanged.connect(self.select)
+        self.details=QLabel("Select a tool.");self.details.setWordWrap(True);self.details.setTextFormat(Qt.TextFormat.PlainText);box.addWidget(self.details)
+        r=row();self.page=QPushButton("Tool page");self.page.clicked.connect(self.open_page);r.addWidget(self.page)
+        self.get=QPushButton("Download");self.get.clicked.connect(lambda:self.download());r.addWidget(self.get)
+        self.cancel=QPushButton("Cancel transfer");self.cancel.clicked.connect(lambda:self.jobs["transfer"].requestInterruption() if "transfer" in self.jobs else None);r.addWidget(self.cancel);self.cancel.hide()
+        self.bar=QProgressBar();box.addWidget(self.bar);self.bar.hide()
+        self.status=QLabel("Loading catalog…");self.status.setWordWrap(True);self.status.setTextFormat(Qt.TextFormat.PlainText);box.addWidget(self.status)
+        self.search.textChanged.connect(self.filter);self.type.currentIndexChanged.connect(self.filter);self.results.itemDoubleClicked.connect(self.open_page)
+        self.update_auth();self.select();QTimer.singleShot(0,self.reload)
+    def job(self,key,fn,done,failed=None):
+        if key in self.jobs:return
+        worker=Worker(fn,self);self.jobs[key]=worker
+        # Deliver after QThread.finished: a continuation may safely start a new job with the same key.
+        reply={}
+        worker.result.connect(lambda value:reply.update(value=value))
+        worker.error.connect(lambda error:reply.update(error=error))
+        def finish():
+            self.jobs.pop(key,None)
+            if self.closing:
+                if not self.jobs: self.close()
+            elif "error" in reply: (failed or self.status.setText)(reply["error"])
+            elif "value" in reply: done(reply["value"])
+            self.select();worker.deleteLater()
+        worker.finished.connect(finish);worker.progress.connect(self.progress);worker.start()
+    def update_auth(self):
+        self.auth.load_cache();self.user=self.auth.cached_auth or {}
+        self.member.setTextFormat(Qt.TextFormat.PlainText)
+        if self.pending_token:
+            code=hashlib.sha256(self.pending_token.encode()).hexdigest()[:8].upper()
+            self.member.setText("Link code: "+code)
+            self.link.setText("Continue in browser")
             return
-        
-        # Start login flow
-        token = auth_manager.login()
-        
-        def on_success(result):
-            self.auth_header.setText(
-                f"Access: {auth_manager.format_tier_name(result['tier'])} - {result['name']}"
-            )
-            self.auth_header.setStyleSheet(
-                "QLabel { background-color:#4a90e2; color:white; font-weight:bold; padding:8px; border-radius:4px; }"
-            )
-            if self.login_btn:
-                self.login_btn.hide()
-            self.on_selection_changed()
-            QMessageBox.information(self, "Login Successful!", 
-                f"Welcome {result['name']}!\n\n" +
-                f"Tier: {auth_manager.format_tier_name(result['tier'])}\n\n" +
-                "Your downloads are ready. The tray menu will refresh on its next restart.")
-        
-        def on_failed():
-            QMessageBox.warning(self, "Login Timeout", 
-                "Login timed out after 2 minutes.\n\n" +
-                "Please try again and complete the login faster.")
-        
-        poller = LoginPoller(token, auth_manager)
-        poller.success.connect(on_success)
-        poller.failed.connect(on_failed)
-        poller.start()
-        
-        # Store reference so it doesn't get garbage collected
-        self.login_poller = poller
-    
-    def load_tools(self):
-        """Load tools from JSON"""
-        try:
-            with urlopen_with_ssl('https://getgoingfast.pro/tools/tools-list.json', timeout=10) as response:
-                data = json.loads(response.read().decode())
-            tools = data.get('tools', [])
-            if not isinstance(tools, list) or not all(isinstance(tool, dict) for tool in tools):
-                raise ValueError("The catalog response is not valid.")
-            self.tools_data = tools
+        self.member.setText(self.auth.format_tier_name(self.user["tier"]) if self.user else "Browsing as guest")
+        self.link.setText("Sign out" if self.user else "Sign in")
+    def refresh_membership(self):
+        # Re-read the effective tier after upgrades. An offline catalog stays usable.
+        if not self.user or self.pending_token or "auth" in self.jobs: return
+        token=self.user.get("token")
+        def apply(data):
+            self.auth.load_cache()
+            if "auth" in self.jobs or (self.auth.cached_auth or {}).get("token")!=token:return
             try:
-                with open(_CATALOG_CACHE + '.tmp', 'w', encoding='utf-8') as handle:
-                    json.dump(data, handle)
-                os.replace(_CATALOG_CACHE + '.tmp', _CATALOG_CACHE)
-            except OSError:
-                pass
-            self.rebuild_type_filter()
-            self.filter_results()
-            self.status_label.setText(f"Loaded {len(self.tools_data)} tools")
-        except Exception as e:
-            try:
-                with open(_CATALOG_CACHE, 'r', encoding='utf-8') as handle:
-                    cached = json.load(handle)
-                self.tools_data = cached.get('tools', [])
-                self.rebuild_type_filter()
-                self.filter_results()
-                self.status_label.setText(f"Offline: showing {len(self.tools_data)} cached tools")
-            except Exception:
-                self.status_label.setText(f"Could not load the app catalog: {redact_secrets(e)}")
-
-    def rebuild_type_filter(self):
-        current_code = self.type_filter.currentData() or ''
-        labels = {'comfy': 'ComfyUI', 'llm': 'LLM', 'tts': 'TTS', 'lipsync': 'Lip Sync'}
-        codes = sorted({str(tool.get('type1', '')).strip().lower() for tool in self.tools_data if tool.get('type1')})
-        self.type_filter.blockSignals(True)
-        self.type_filter.clear()
-        self.type_filter.addItem("Type (all)", "")
-        for code in codes:
-            self.type_filter.addItem(labels.get(code, code.replace('-', ' ').title()), code)
-        index = self.type_filter.findData(current_code)
-        self.type_filter.setCurrentIndex(index if index >= 0 else 0)
-        self.type_filter.blockSignals(False)
-    
-    def on_selection_changed(self):
-        """Handle selection change - show/hide download button"""
-        item = self.results_list.currentItem()
-        if not item:
-            self.download_btn.hide()
-            self.selection_label.setText("")
-            self.current_selection = None
-            return
-        
-        tool_name = item.text()
-        tool_data = item.data(Qt.ItemDataRole.UserRole)
-        
-        if not tool_data:
-            self.download_btn.hide()
-            self.selection_label.setText("")
-            self.current_selection = None
-            return
-        
-        self.current_selection = tool_data
-        
-        # Check tier access
-        # Catalog access is cumulative: free, Prairie Dog, then Farm Hand and above.
-        # User tiers: free, prairie-dog, farm-hand, rancher, gunslinger
-        required_membership = tool_data.get('membership', 'free')
-        user_tier = auth_manager.get_tier() if auth_manager else 'free'
-        
-        has_access = membership_allows_download(user_tier, required_membership)
-        
-        # Show selection info
-        if required_membership == 'fs':
-            self.selection_label.setText(f"Selected: {tool_name} - purchase from the tool page")
-        elif not has_access:
-            self.selection_label.setText(f"Selected: {tool_name} - higher membership tier required")
-        else:
-            self.selection_label.setText(f"Selected: {tool_name}")
-        
-        # Show download button only if:
-        # 1. Tool has a slug (needed for download API)
-        # 2. User has tier access to this tool
-        tool_slug = tool_data.get('slug', '')
-        if tool_slug and has_access:
-            self.download_btn.show()
-            self.download_btn.setEnabled(True)
-        else:
-            self.download_btn.hide()
-    
-    def download_selected(self):
-        """Download and install selected tool"""
-        if not self.current_selection:
-            return
-        
-        tool_slug = self.current_selection.get('slug', '')
-        tool_name = self.current_selection.get('name', 'tool')
-        
-        if not tool_slug:
-            QMessageBox.warning(self, "No Slug", "This tool doesn't have a slug identifier.")
-            return
-        
-        # Get user's auth token
-        user_token = ''
-        if auth_manager and auth_manager.is_authenticated():
-            auth_data = auth_manager.get_auth()
-            user_token = auth_data.get('token', '') if auth_data else ''
-        
-        if not user_token:
-            QMessageBox.warning(self, "Not Authenticated", 
-                "You need to be logged in to download.\n\n" +
-                "Click 'Login to GGF' first.")
-            return
-        
-        # Send the token in the header (preferred) AND as a ?token= query param
-        # (fallback), so downloads work whether or not the header-aware
-        # download-api.php has been deployed. Token is URL-safe by construction.
-        encoded_slug = urllib.parse.quote(tool_slug)
-        download_url = f"https://getgoingfast.pro/download-api.php?slug={encoded_slug}&token={user_token}"
-        _log(f"download_selected: slug={tool_slug}")
-        
-        # Disable UI during download
-        self.download_btn.setEnabled(False)
-        self.progress_bar.show()
-        self.progress_bar.setValue(0)
-        
-        # Start download in thread
-        self.download_worker = DownloadWorker(download_url, tool_slug, user_token)
-        self.download_worker.progress.connect(self.on_download_progress)
-        self.download_worker.finished.connect(self.on_download_finished)
-        self.download_worker.start()
-    
-    def on_download_progress(self, percent, message):
-        """Update progress bar"""
-        self.progress_bar.setValue(percent)
-        self.status_label.setText(message)
-    
-    def on_download_finished(self, success, message, file_path, file_ext):
-        """Handle download completion"""
-        self.progress_bar.hide()
-        self.download_btn.setEnabled(True)
-        
-        if not success:
-            QMessageBox.critical(self, "Error", message)
-            self.status_label.setText("Download failed")
-            return
-        
-        # Handle based on file type
-        if file_ext in ('.zip', '.rar', '.7z'):
-            # ZIP file - save to Downloads\ggf first
-            downloads_dir = os.path.join(os.path.expanduser('~'), 'Downloads', 'ggf')
-            os.makedirs(downloads_dir, exist_ok=True)
-            
-            zip_filename = os.path.basename(file_path)
-            permanent_path = unique_destination(downloads_dir, zip_filename)
-            shutil.move(file_path, permanent_path)
-            try:
-                os.rmdir(os.path.dirname(file_path))
-            except OSError:
-                pass
-            installer_opened = False
-            try:
-                script_dir = APP_DIR
-                creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP") else 0
-                if getattr(sys, 'frozen', False):
-                    subprocess.Popen(
-                        [sys.executable, "--install-zip", permanent_path],
-                        cwd=script_dir,
-                        creationflags=creationflags,
-                        env=get_subprocess_env()
-                    )
+                if data:self.auth.save_cache(data)
                 else:
-                    tray_script = os.path.join(script_dir, "ggf-tray.py")
-                    subprocess.Popen(
-                        [sys.executable, tray_script, "--install-zip", permanent_path],
-                        cwd=script_dir,
-                        creationflags=creationflags
-                    )
-                installer_opened = True
-            except Exception as e:
-                QMessageBox.warning(self, "Installer Error",
-                    f"Downloaded: {zip_filename}\n\n" +
-                    f"Saved to: {downloads_dir}\n\n" +
-                    f"Could not open installer:\n{str(e)}")
-            if installer_opened:
-                QMessageBox.information(self, "Download Complete",
-                    f"Downloaded: {zip_filename}\n\n" +
-                    "Opening the GGF installer now.")
-                self.status_label.setText("Download complete - installer opened")
+                    self.auth.clear_cache()
+                    self.link_hint.setText("This desktop link is no longer active. Choose Sign in to link your account again.")
+                    self.link_hint.show()
+            except (OSError, RuntimeError, ValueError):
+                self.status.setText("Windows could not update the saved account.")
+            self.update_auth()
+        def verify(w):
+            try:return self.auth.verify_link(token)
+            except PermissionError:return None
+        self.job("membership",verify,apply)
+    def signin(self):
+        if "auth" in self.jobs or "transfer" in self.jobs:return
+        if self.user and not self.pending_token:
+            self.link.setEnabled(False)
+            self.link_hint.hide()
+            def signed(ok):
+                self.link.setEnabled(True);self.update_auth();self.status.setText("Signed out." if ok else "Signed out here. Server revocation could not be confirmed.")
+            def failed(message):
+                self.link.setEnabled(True);self.update_auth();self.status.setText("Sign-out did not finish: "+message)
+            self.job("auth",lambda w:self.auth.logout(),signed,failed);return
+        if not self.pending_token or time.monotonic() >= self.link_deadline:
+            self.pending_token=self.auth.generate_token()
+            self.link_deadline=time.monotonic()+self.LINK_WINDOW
+        self.update_auth()
+        self.stop_link.show();self.link_hint.show();self.link_hint.setText(self.LINK_HELP)
+        try: opened=self.auth.open_link(self.pending_token)
+        except (OSError, webbrowser.Error): opened=False
+        self.pending_help=self.LINK_HELP if opened else "The browser did not open. Check your default browser, then choose Continue in browser."
+        self.link_hint.setText(self.pending_help)
+        self.check_pending()
+
+    def end_link(self, message):
+        self.pending_token=None
+        self.link_timer.stop()
+        self.stop_link.hide()
+        self.link_hint.setText(message);self.link_hint.show()
+        self.update_auth();self.select()
+
+    def cancel_link(self):
+        self.end_link("Sign-in cancelled. You can start again whenever you’re ready.")
+
+    def check_pending(self):
+        token=self.pending_token
+        if not token or self.closing:return
+        if time.monotonic() >= self.link_deadline:
+            self.end_link("The link timed out. Choose Sign in for a new code.")
+            return
+        if "check-link" in self.jobs:return
+        self.link_timer.stop()
+        def checked(data=None, error=None):
+            # A slow response from a cancelled attempt must never sign in a new one.
+            if self.pending_token != token:
+                if self.pending_token: self.check_pending()
                 return
-            
-            # Inform user where file was saved and how to install
-            QMessageBox.information(self, "Download Complete",
-                f"Downloaded: {zip_filename}\n\n" +
-                f"Saved to: {downloads_dir}\n\n" +
-                "To install this app:\n" +
-                "1. Right-click the GGF Tray icon\n" +
-                "2. Select 'A.I. Apps → Install GGF Apps'\n" +
-                "3. Browse to the downloaded ZIP file")
-            
-            self.status_label.setText("Download complete!")
-        else:
-            # Non-ZIP file - ask where to save (default to ~/Downloads/ggf)
-            from PyQt6.QtWidgets import QFileDialog
-            default_name = os.path.basename(file_path)
-            downloads_ggf = os.path.join(os.path.expanduser('~'), 'Downloads', 'ggf')
-            os.makedirs(downloads_ggf, exist_ok=True)
-            save_path, _ = QFileDialog.getSaveFileName(self, "Save File",
-                os.path.join(downloads_ggf, default_name), "All Files (*.*)")
-            
-            if save_path:
-                shutil.move(file_path, save_path)
-                try:
-                    os.rmdir(os.path.dirname(file_path))
-                except OSError:
-                    pass
-                _log(f"File saved to: {save_path}")
-                
-                if file_ext in ['.exe', '.bat']:
-                    reply = QMessageBox.question(self, "Run Now?",
-                        f"File saved to:\n{save_path}\n\n" +
-                        f"Would you like to run this {file_ext[1:].upper()} now?",
-                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-                    
-                    if reply == QMessageBox.StandardButton.Yes:
-                        try:
-                            file_dir = os.path.dirname(save_path)
-                            _log(f"Launching: {save_path}")
-                            if file_ext == '.bat':
-                                launch_console_command([save_path], cwd=file_dir, keep_open=True)
-                            else:
-                                os.startfile(save_path)
-                            QMessageBox.information(self, "Launched", "Script/application started!")
-                        except Exception as e:
-                            _log(f"Launch error: {e}")
-                            QMessageBox.warning(self, "Error", f"Failed to launch:\n{str(e)}")
+            if data:
+                try: self.auth.save_cache(data)
+                except (OSError, RuntimeError, ValueError):
+                    self.link_hint.setText("GGF confirmed the link, but Windows could not save it. Choose Refresh to retry.")
                 else:
-                    QMessageBox.information(self, "Success", f"File saved to:\n{save_path}")
-                
-                self.status_label.setText("File saved!")
+                    self.end_link("Account linked. Select a tool to download.")
+                    return
+            elif error:
+                self.link_hint.setText(error+" Choose Refresh to check again, or cancel sign-in.")
             else:
-                try:
-                    os.remove(file_path)
-                except:
-                    pass
-                shutil.rmtree(os.path.dirname(file_path), ignore_errors=True)
-                self.status_label.setText("Download cancelled")
-    
-    def filter_results(self):
-        """Filter results based on search criteria"""
-        self.results_list.clear()
-        self.url_mapping.clear()
-        self.current_selection = None
-        self.download_btn.hide()
-        
-        search_text = self.search_input.text().lower()
-        type_filter = self.type_filter.currentData() or ''
+                self.link_hint.setText(self.pending_help)
+            # A one-shot poll leaves the controls available and never overlaps requests.
+            self.link_timer.start(15000 if error or data else 4000)
+        self.job("check-link",lambda w:self.auth.verify_link(token),checked,lambda error:checked(error=error))
 
-        def _is_fav(t):
-            v = t.get('fav')
-            if isinstance(v, str):
-                return v.strip().lower() in ('1', 'true', 'yes', 'y', 'fav')
-            return bool(v)
+    def changeEvent(self,event):
+        super().changeEvent(event)
+        if event.type()==QEvent.Type.ActivationChange and self.isActiveWindow() and getattr(self,"pending_token",None):
+            self.check_pending()
 
-        matches = []
-        for tool in self.tools_data:
-            name = tool.get('name', '').lower()
-            description = tool.get('description', '').lower()
-            # A tool can be tagged in up to three category slots; match any of them.
-            types = {
-                (tool.get('type1') or '').lower(),
-                (tool.get('type2') or '').lower(),
-                (tool.get('type3') or '').lower(),
-            }
-
-            # Check search text
-            if search_text and search_text not in name and search_text not in description:
-                continue
-
-            if type_filter:
-                if type_filter not in types:
-                    continue
-
-            matches.append(tool)
-
-        # Favorites (the catalog's 'fav' apps) float to the top; the rest keep
-        # their existing catalog order (Python's sort is stable).
-        matches.sort(key=lambda t: 0 if _is_fav(t) else 1)
-
-        index = 0
-        for tool in matches:
-            item = QListWidgetItem(tool.get('name', ''))
-            item.setData(Qt.ItemDataRole.UserRole, tool)
-            self.results_list.addItem(item)
-            self.url_mapping[index] = tool.get('url', '')
-            index += 1
-
-        if self.results_list.count() == 0:
-            self.results_list.addItem("No results found")
-            self.status_label.setText("No matching apps")
+    def reload(self):
+        if self.pending_token: self.check_pending()
         else:
-            self.status_label.setText(f"Found {self.results_list.count()} apps")
-    
-    def open_app_url(self, item):
-        """Open selected app in browser"""
-        if item:
-            tool_data = item.data(Qt.ItemDataRole.UserRole)
-            url = tool_data.get('url', '') if isinstance(tool_data, dict) else ''
-            if url:
-                # Check if URL already contains a full domain (starts with http)
-                if url.startswith('http://') or url.startswith('https://'):
-                    full_url = url
-                # Check for special domains
-                elif '/rope' in url.lower():
-                    full_url = f"https://ropedownload.com{url}"
-                elif '/roop' in url.lower():
-                    full_url = f"https://roopdownload.com{url}"
-                else:
-                    # Standard apps use getgoingfast.pro
-                    full_url = f"https://getgoingfast.pro{url}"
-                webbrowser.open(full_url)
+            self.update_auth();self.refresh_membership()
+        self.status.setText("Loading catalog…")
+        def loaded(result):
+            self.tools,self.offline=result
+            codes=sorted({str(t[k]).lower() for t in self.tools for k in ("type1","type2","type3") if t.get(k)})
+            old=self.type.currentData();self.type.blockSignals(True);self.type.clear();self.type.addItem("All categories","")
+            for code in codes:self.type.addItem(code.upper() if code in ("llm","tts") else code.title(),code)
+            self.type.setCurrentIndex(max(0,self.type.findData(old)));self.type.blockSignals(False);self.filter()
+        self.job("catalog",lambda w:catalog(get_state_dir()),loaded)
+    def filter(self,*_):
+        self.results.clear();q=self.search.text().strip().casefold();category=self.type.currentData()
+        rows=[t for t in self.tools if q in (t["name"]+" "+str(t.get("description") or "")).casefold() and
+              (not category or category in [str(t.get(k,"")).lower() for k in ("type1","type2","type3")])]
+        rows.sort(key=lambda t:(str(t.get("fav","")).lower() not in ("true","1","yes","y","fav"), t["name"].casefold()))
+        for t in rows:
+            item=QListWidgetItem(t["name"]);item.setData(Qt.ItemDataRole.UserRole,t);self.results.addItem(item)
+        if rows:self.results.setCurrentRow(0)
+        if "auth" not in self.jobs and "transfer" not in self.jobs:self.status.setText(("Offline catalog • " if self.offline else "")+f"{len(rows)} of {len(self.tools)} tools")
+        self.select()
+    def selected(self):
+        item=self.results.currentItem();return item.data(Qt.ItemDataRole.UserRole) if item else {}
+    def select(self,*_):
+        t=self.selected();code=t.get("membership");label={"pd":"Prairie Dog+","fh":"Farm Hand+","free":"Free members","fs":"Website purchase"}.get(code,"See tool page")
+        self.details.setText(f"{label}   •   {t['name']}\n{str(t.get('description') or '')[:280]}" if t else "Select a tool.")
+        self.page.setEnabled(bool(t.get("url")));self.get.setEnabled(bool(self.user and not self.pending_token and t.get("slug") and membership_allows_download(self.user.get("tier"),code) and "transfer" not in self.jobs and "auth" not in self.jobs))
+    def open_page(self,*_):
+        url=urljoin(ORIGIN+"/",self.selected().get("url") or "")
+        if urlsplit(url).scheme=="https":webbrowser.open(url)
+    def progress(self,n,total):
+        self.bar.setRange(0,100 if total else 0)
+        if total:self.bar.setValue(int(n*100/total))
+        self.status.setText(f"Downloading • {n/1024**2:.1f} MiB"+(f" of {total/1024**2:.1f} MiB" if total else ""))
+    def download(self,variant=None,tool=None):
+        t=tool or self.selected();self.update_auth()
+        if not self.user or not membership_allows_download(self.user.get("tier"),t.get("membership")):self.select();return
+        token=self.user["token"];self.bar.show();self.bar.setRange(0,0);self.cancel.show();self.link.setEnabled(False);self.get.setEnabled(False)
+        self.status.setText("Requesting "+t["name"]+"…")
+        def transfer(w):
+            try:return fetch(t["slug"],token,Path.home()/"Downloads"/"GGF",w.progress.emit,w.isInterruptionRequested,variant)
+            except Variants as v:return v.names
+        def reset():
+            self.bar.hide();self.cancel.hide();self.link.setEnabled(True)
+        def failed(message):
+            reset();self.status.setText("Download stopped: "+message);self.refresh_membership()
+        def saved(path):
+            reset()
+            if isinstance(path,list):
+                choice,ok=QInputDialog.getItem(self,"Choose a package",t["name"],path,0,False)
+                if ok:self.download(choice,t)
+                else:self.status.setText("Package selection cancelled.")
+                return
+            self.status.setText(f"Saved to {path}")
+            if path.suffix.lower() in (".zip",".7z",".rar",".exe",".bat"):
+                if QMessageBox.question(self,"Add to GGF library?",f"{path.name} is in Downloads\\GGF.\n\nPrepare this app and set up Quick Launch?",defaultButton=QMessageBox.StandardButton.Yes)==QMessageBox.StandardButton.Yes:
+                    try:start_setup(path)
+                    except OSError as exc:self.status.setText(f"Saved to {path}. Could not open setup: {exc}")
+            else:
+                if QMessageBox.question(self,"Download complete",f"Saved to:\n{path}\n\nOpen the download folder?",defaultButton=QMessageBox.StandardButton.No)==QMessageBox.StandardButton.Yes:os.startfile(path.parent)
+        self.job("transfer",transfer,saved,failed)
+    def show_welcome(self):
+        if self.guide is None:
+            self.guide = Guide(self)
+            self.guide.finished.connect(self.finish_welcome)
+            self.guide.show()
+        self.guide.raise_()
+        self.guide.activateWindow()
 
+    def finish_welcome(self, result):
+        self.guide = None
+        try:
+            remember_welcome()
+        except OSError as exc:
+            self.status.setText("Could not save the welcome preference: " + str(exc))
 
-    def show_app_context_menu(self, pos):
-        """Right-click context menu on app list - show URLs for debugging (disabled)"""
-        return  # commented out - re-enable for debugging
-        from PyQt6.QtWidgets import QMenu
-        item = self.results_list.itemAt(pos)
-        if not item:
-            return
-        tool_name = item.text()
-        tool_data = next((t for t in self.tools_data if t.get('name') == tool_name), None)
-        if not tool_data:
-            return
-
-        slug = tool_data.get('slug', '')
-        page_url = tool_data.get('url', '')
-        if slug:
-            dl_url = f"https://getgoingfast.pro/download-api.php?slug={urllib.parse.quote(slug)} (authenticated header)"
+    def bring_forward(self, tour=False):
+        self.closing = False
+        if self.isMinimized():
+            self.showNormal()
         else:
-            dl_url = "(no slug)"
-
-        if page_url:
-            full_page = page_url if page_url.startswith('http') else f"https://getgoingfast.pro{page_url}"
+            self.show()
+        self.raise_()
+        self.activateWindow()
+        if tour or self.guide:
+            self.show_welcome()
         else:
-            full_page = "(no page url)"
+            modal = QApplication.activeModalWidget()
+            if modal:
+                modal.raise_()
+                modal.activateWindow()
 
-        _log(f"Right-click: {tool_name} | slug={slug} | dl_url={dl_url} | page={full_page}")
-
-        menu = QMenu(self)
-        act_dl   = menu.addAction(f"📋 Copy Download URL  (slug: {slug or 'none'})")
-        act_page = menu.addAction(f"🌐 Copy Page URL")
-        act_open = menu.addAction(f"🔗 Open Page in Browser")
-        action = menu.exec(self.results_list.mapToGlobal(pos))
-
-        if action == act_dl:
-            QApplication.clipboard().setText(dl_url)
-            self.status_label.setText(f"Copied download URL for: {tool_name}")
-        elif action == act_page:
-            QApplication.clipboard().setText(full_page)
-            self.status_label.setText(f"Copied page URL for: {tool_name}")
-        elif action == act_open:
-            webbrowser.open(full_page)
-
+    def closeEvent(self,event):
+        if self.pending_token: self.cancel_link()
+        if self.jobs:
+            self.closing=True
+            for worker in self.jobs.values():worker.requestInterruption()
+            event.ignore();self.hide()
+        else:event.accept()
 
 def main():
-    """Main entry point"""
-    app = QApplication(sys.argv)
-    
-    # Create and show dialog
-    dialog = SearchDialog()
-    dialog.show()
-    
-    # Run the Qt event loop
-    sys.exit(app.exec())
-
+    tour = "--welcome" in sys.argv
+    owner = CatalogOwner()
+    try:
+        if not owner.primary:
+            activate_existing(tour)
+            return 0
+        app = QApplication(sys.argv)
+        window = SearchDialog()
+        owner.attach(window)
+        def activated():
+            requested, replay = owner.consume()
+            if requested:
+                window.bring_forward(replay)
+        timer = QTimer(window)
+        timer.timeout.connect(activated)
+        timer.start(125)
+        window.show()
+        if tour or not welcome_seen():
+            QTimer.singleShot(0, window.show_welcome)
+        return app.exec()
+    finally:
+        owner.release()
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

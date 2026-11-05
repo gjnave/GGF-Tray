@@ -6,7 +6,8 @@ psutil>=5.9.0
 numpy
 certifi
 imageio-ffmpeg
-PyQt6
-PyQt6-WebEngine
 pyaudiowpatch
 PyInstaller>=6.10,<7
+PySide6-Essentials==6.11.1
+PySide6-Addons==6.11.1
+shiboken6==6.11.1

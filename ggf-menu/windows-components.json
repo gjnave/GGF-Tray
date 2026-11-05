@@ -1,0 +1,106 @@
+[
+  {
+    "name": "PySide6-Essentials",
+    "version": "6.11.1",
+    "file": "pyside6_essentials-6.11.1-cp310-abi3-win_amd64.whl",
+    "url": "https://files.pythonhosted.org/packages/64/0e/b663ecc96ca57b5c91b83b6615d6b174380b0faf30338125c26e053d6aa7/pyside6_essentials-6.11.1-cp310-abi3-win_amd64.whl",
+    "sha256": "63311bd48e32c584599ab04b9ef7c324082374cd2c9fa533f978fb893bb47e40",
+    "size": 77549267
+  },
+  {
+    "name": "PySide6-Addons",
+    "version": "6.11.1",
+    "file": "pyside6_addons-6.11.1-cp310-abi3-win_amd64.whl",
+    "url": "https://files.pythonhosted.org/packages/9a/bd/8adc4d350b3b363f3dfc8fccdcf5bfed25f7e36c2fff30c64e106f4f1572/pyside6_addons-6.11.1-cp310-abi3-win_amd64.whl",
+    "sha256": "0d13c4dfd671b050a48e4f8d8ddc724b7248f9c0437e7fc47fdf316278572923",
+    "size": 168816308
+  },
+  {
+    "name": "shiboken6",
+    "version": "6.11.1",
+    "file": "shiboken6-6.11.1-cp310-abi3-win_amd64.whl",
+    "url": "https://files.pythonhosted.org/packages/52/b5/3f6fb2ee65b534193fb4ef713dd619dc31dadff5d12c16979a7699ad58be/shiboken6-6.11.1-cp310-abi3-win_amd64.whl",
+    "sha256": "c2c6863aa80ec18c0f82cea3417837b279cdc60024ac17123461dc9042577df7",
+    "size": 1223647
+  },
+  {
+    "name": "imageio-ffmpeg",
+    "version": "0.6.0",
+    "file": "imageio_ffmpeg-0.6.0-py3-none-win_amd64.whl",
+    "url": "https://files.pythonhosted.org/packages/2c/c6/fa760e12a2483469e2bf5058c5faff664acf66cadb4df2ad6205b016a73d/imageio_ffmpeg-0.6.0-py3-none-win_amd64.whl",
+    "sha256": "02fa47c83703c37df6bfe4896aab339013f62bf02c5ebf2dce6da56af04ffc0a",
+    "size": 31246824
+  },
+  {
+    "name": "pystray",
+    "version": "0.19.5",
+    "file": "pystray-0.19.5-py2.py3-none-any.whl",
+    "url": "https://files.pythonhosted.org/packages/5c/64/927a4b9024196a4799eba0180e0ca31568426f258a4a5c90f87a97f51d28/pystray-0.19.5-py2.py3-none-any.whl",
+    "sha256": "a0c2229d02cf87207297c22d86ffc57c86c227517b038c0d3c59df79295ac617",
+    "size": 49068
+  },
+  {
+    "name": "certifi",
+    "version": "2026.6.17",
+    "file": "certifi-2026.6.17-py3-none-any.whl",
+    "url": "https://files.pythonhosted.org/packages/ef/2f/c5464532e965badff2f4c4c1a3a83f5697f0d7c407ed0cda44aaa99bb451/certifi-2026.6.17-py3-none-any.whl",
+    "sha256": "2227dcbaafe0d2f59279d1762ddddc37783ed4354594f194ffc31d20f41fc3db",
+    "size": 133289
+  },
+  {
+    "name": "numpy",
+    "version": "2.4.6",
+    "file": "numpy-2.4.6-cp311-cp311-win_amd64.whl",
+    "url": "https://files.pythonhosted.org/packages/c5/31/7fc6239c12bce7e931463251cca4426c465e1876ba3cc785402ef4dd8f4e/numpy-2.4.6-cp311-cp311-win_amd64.whl",
+    "sha256": "1e254a00cdf42b1e4d5b3d68d33af63268d41340d8885df2ab6470f2e1500147",
+    "size": 12608406
+  },
+  {
+    "name": "packaging",
+    "version": "26.2",
+    "file": "packaging-26.2-py3-none-any.whl",
+    "url": "https://files.pythonhosted.org/packages/df/b2/87e62e8c3e2f4b32e5fe99e0b86d576da1312593b39f47d8ceef365e95ed/packaging-26.2-py3-none-any.whl",
+    "sha256": "5fc45236b9446107ff2415ce77c807cee2862cb6fac22b8a73826d0693b0980e",
+    "size": 100195
+  },
+  {
+    "name": "pillow",
+    "version": "12.3.0",
+    "file": "pillow-12.3.0-cp311-cp311-win_amd64.whl",
+    "url": "https://files.pythonhosted.org/packages/63/c6/4bad1b18d132a50b27e1365e1ab163616f7a5bb56d330f66f9d1d9d4f9d4/pillow-12.3.0-cp311-cp311-win_amd64.whl",
+    "sha256": "8e95e1385e4998ae9694eeaa4730ba5457ff61185b3a55e2e7bea0880aef452a",
+    "size": 7233653
+  },
+  {
+    "name": "psutil",
+    "version": "7.2.2",
+    "file": "psutil-7.2.2-cp37-abi3-win_amd64.whl",
+    "url": "https://files.pythonhosted.org/packages/b4/90/e2159492b5426be0c1fef7acba807a03511f97c5f86b3caeda6ad92351a7/psutil-7.2.2-cp37-abi3-win_amd64.whl",
+    "sha256": "eb7e81434c8d223ec4a219b5fc1c47d0417b12be7ea866e24fb5ad6e84b3d988",
+    "size": 137737
+  },
+  {
+    "name": "PyAudioWPatch",
+    "version": "0.2.12.8",
+    "file": "pyaudiowpatch-0.2.12.8-cp311-cp311-win_amd64.whl",
+    "url": "https://files.pythonhosted.org/packages/55/df/88a94ca45c8b158b52888f5010cdad2f7998d5c4a44d0794fab97937f9ec/pyaudiowpatch-0.2.12.8-cp311-cp311-win_amd64.whl",
+    "sha256": "8610948499efa12b01ec861408fcc95e7bc18c1dddf0abbfed6fd2305a898f63",
+    "size": 99097
+  },
+  {
+    "name": "six",
+    "version": "1.17.0",
+    "file": "six-1.17.0-py2.py3-none-any.whl",
+    "url": "https://files.pythonhosted.org/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl",
+    "sha256": "4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274",
+    "size": 11050
+  },
+  {
+    "name": "yt-dlp",
+    "version": "2026.7.4",
+    "file": "yt_dlp-2026.7.4-py3-none-any.whl",
+    "url": "https://files.pythonhosted.org/packages/f9/8a/cd4c9b02c10c563adfe78118310129641900e1cd6de888cfae2452072696/yt_dlp-2026.7.4-py3-none-any.whl",
+    "sha256": "f11f2b11d5a8ac4059f9bdf29fa4407dc7c6bb00c5097e95ca22a7a9db518266",
+    "size": 3184705
+  }
+]

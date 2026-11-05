@@ -32,5 +32,5 @@ output_template = %(title)s.%(ext)s
 default_download_dir = Downloads
 
 [Paths]
-comfyui_path = D:/staging/Comfy/ComfyUI
+comfyui_path =
 

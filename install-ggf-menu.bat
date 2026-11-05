@@ -1,92 +1,74 @@
+@if (@CodeSection == @Batch) @then
 @echo off
-echo.
-echo ===============================================
-echo    GGF - Get Going Fast Menu Setup
-echo ===============================================
-echo.
-
-REM Check if Python is installed
-python --version >nul 2>&1
+setlocal EnableExtensions DisableDelayedExpansion
+set "INSTALL_SCRIPT=%~f0"
+cd /d "%~dp0ggf-menu" || exit /b 1
+if exist "GGF-Tray.exe" goto packaged
+if not exist "requirements.txt" goto missing
+if exist "venv\Scripts\python.exe" goto dependencies
+where py.exe >nul 2>nul
+if errorlevel 1 goto plainpython
+py -3.11 -m venv venv
+if not errorlevel 1 goto dependencies
+:plainpython
+python -m venv venv || goto failed
+:dependencies
+"venv\Scripts\python.exe" -m pip install -r requirements.txt || goto failed
+start "" /d "%cd%" "%cd%\venv\Scripts\pythonw.exe" "%cd%\ggf-tray.py"
+exit /b 0
+:packaged
+set "DEST=%LOCALAPPDATA%\Programs\Get Going Fast\Tray-0.16.0"
+if not exist "%DEST%\" mkdir "%DEST%" || goto failed
+if exist "%DEST%\GGF-Tray.exe" goto existing
+copy /b /-y "GGF-Tray.exe" "%DEST%\GGF-Tray.exe" <nul >nul || goto failed
+:existing
+fc /b "GGF-Tray.exe" "%DEST%\GGF-Tray.exe" >nul
+if errorlevel 1 goto mismatch
+set "MENU=%APPDATA%\Microsoft\Windows\Start Menu\Programs"
+if not exist "%MENU%\" mkdir "%MENU%"
+cscript.exe //nologo //E:JScript "%INSTALL_SCRIPT%" "%MENU%\Get Going Fast Tray.lnk" "%DEST%\GGF-Tray.exe"
+if errorlevel 1 echo Start menu shortcut unavailable. You can open the EXE directly.
+set "SETUP_MODE="
+if /i "%~1"=="--no-launch" set "SETUP_MODE=--setup-unattended"
+start "" /wait "%DEST%\GGF-Tray.exe" --register-startup %SETUP_MODE%
 if errorlevel 1 (
-    echo ERROR: Python is not installed or not in PATH
-    echo Please install Python 3.8+ from python.org
-    pause
-    exit /b 1
+  echo Windows startup could not be configured. See Start silently with Windows in the tray menu.
+  exit /b 1
 )
-
-echo Python found!
-python --version
-echo.
-
-REM Check if ffmpeg is installed
-where ffmpeg >nul 2>&1
-if errorlevel 1 (
-    echo WARNING: ffmpeg not found in PATH
-    echo Video conversion features will not work
-    echo Download ffmpeg from: https://ffmpeg.org/download.html
-    echo.
-) else (
-    echo ffmpeg found!
-    ffmpeg -version | findstr "ffmpeg version"
-    echo.
-)
-
-REM Change to ggf-menu directory
-cd /d "%~dp0ggf-menu"
-
-REM Install Python dependencies
-echo Installing Python dependencies...
-echo.
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
-
-if errorlevel 1 (
-    echo.
-    echo ERROR: Failed to install dependencies
-    pause
-    exit /b 1
-)
-
-REM Create whisper venv but don't install whisper yet
-echo.
-echo Setting up Whisper environment (venv only)...
-echo Whisper models will download on first use
-echo.
-
-if not exist whisper_venv (
-    python -m venv whisper_venv
-    echo Whisper venv created!
-) else (
-    echo Whisper venv already exists
-)
-
-echo.
-echo ===============================================
-echo    Setup Complete!
-echo ===============================================
-echo.
-echo GGF Menu is ready to use!
-echo.
-echo Adding GGF Tray to Windows Startup...
-cd /d "%~dp0"
-powershell -Command "$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut($env:APPDATA + '\Microsoft\Windows\Start Menu\Programs\Startup\GGF Tray.lnk'); $s.TargetPath = '%~dp0GGF-Tray.bat'; $s.WorkingDirectory = '%~dp0'; $s.IconLocation = '%~dp0ggf-menu\logo.ico'; $s.WindowStyle = 7; $s.Save()"
-
-if exist "%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\GGF Tray.lnk" (
-    echo ✓ GGF Tray will start automatically on Windows boot
-) else (
-    echo ✗ Could not add to startup - you can manually run GGF-Tray.bat
-)
-
-echo.
-echo Adding GGF-Tray to Windows Explorer context menus...
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0Install-GGF-ContextMenu.ps1"
-
-echo.
-echo To start now: Run GGF-Tray.bat
-echo To open menu: Run ggf-menu\GGF.bat
-echo.
-echo NOTE: Whisper transcription will download models
-echo       (~75MB for 'base') on first use.
-echo       You can change the model in ggf-menu\config.txt
-echo.
+if /i "%~1"=="--no-launch" exit /b 0
+echo GGF Tray is installed at "%DEST%\GGF-Tray.exe".
+echo Starting GGF Tray. Look in the notification area by the clock.
+start "" /d "%DEST%" "%DEST%\GGF-Tray.exe"
+exit /b 0
+:mismatch
+echo A different EXE is already in "%DEST%". No existing program was replaced.
+echo You can run the included ggf-menu\GGF-Tray.exe directly.
 pause
+exit /b 1
+:missing
+echo Extract the complete ZIP before running the installer.
+pause
+exit /b 1
+:failed
+echo Setup did not finish. See the error above.
+pause
+exit /b 1
+
+@end
+var shell = new ActiveXObject("WScript.Shell");
+var fso = new ActiveXObject("Scripting.FileSystemObject");
+var linkPath=WScript.Arguments(0), target=WScript.Arguments(1);
+var link=shell.CreateShortcut(linkPath);
+var oldManagedPath=fso.BuildPath(fso.GetParentFolderName(fso.GetParentFolderName(target)), "Tray-0.13.0\\GGF-Tray.exe");
+var priorManagedPath=fso.BuildPath(fso.GetParentFolderName(fso.GetParentFolderName(target)), "Tray-0.14.0\\GGF-Tray.exe");
+var lastManagedPath=fso.BuildPath(fso.GetParentFolderName(fso.GetParentFolderName(target)), "Tray-0.15.0\\GGF-Tray.exe");
+var lastPatchPath=fso.BuildPath(fso.GetParentFolderName(fso.GetParentFolderName(target)), "Tray-0.15.1\\GGF-Tray.exe");
+var existing=String(link.TargetPath).toLowerCase();
+if (fso.FileExists(linkPath) && existing !== target.toLowerCase() && existing !== oldManagedPath.toLowerCase() && existing !== priorManagedPath.toLowerCase() && existing !== lastManagedPath.toLowerCase() && existing !== lastPatchPath.toLowerCase()) {
+    WScript.Echo("An existing shortcut was preserved."); WScript.Quit(1);
+}
+link.TargetPath=target;
+link.WorkingDirectory=fso.GetParentFolderName(target);
+link.IconLocation=target+",0";
+link.Description="GGF app catalog, Quick Launch and music";
+link.Save();

@@ -1,0 +1,40 @@
+GET GOING FAST TRAY END-USER LICENSE
+Copyright 2026 Get Going Fast. All rights reserved.
+
+This license applies to Get Going Fast's original GGF Tray software, artwork
+and documentation that accompany this notice. It applies beginning with
+version 0.16.0. See "Third-party software" below for the separate terms that
+apply to software created by others.
+
+Permission to run the official release
+Get Going Fast grants you a limited, nonexclusive, nontransferable license to
+download the official release from Get Going Fast or its designated GitHub
+Releases page and to install and run the unmodified GGF application on
+Windows computers you own or are authorized to use. You may do this as an end
+user at home or at work. You may keep a backup for your own use and customize
+settings through the application. Website access and downloads are subject
+to the permissions of your own GGF account.
+
+Restrictions on GGF's original work
+Other uses require Get Going Fast's prior written permission. In particular,
+you may not take or adapt GGF's source, build and use a modified GGF app,
+incorporate GGF code or artwork into a personal or commercial project, or
+redistribute, sell, sublicense or rebrand GGF's original work. No right to
+use GGF names or marks to imply endorsement is granted. These restrictions
+apply only to the extent permitted by law and are subject to the exceptions
+below. The public repository may be viewed and forked as GitHub's terms
+permit. Share the official download link when directing others to GGF Tray.
+
+Third-party software
+Each third-party component remains governed by its own license, including
+the rights to use, copy, inspect, modify, replace and redistribute that
+component as its license permits. You may replace compatible third-party
+libraries and run the GGF application with them. You may reverse-engineer
+the application to debug modifications to those libraries to the extent
+their licenses require. Those rights take precedence over any conflicting
+term above. Runtime component locations and notices are described in the
+member guide. Tools downloaded through the catalog carry their own terms.
+
+The application is provided as is, without warranty, to the extent
+permitted by law. This license does not limit rights that applicable law
+does not allow the parties to exclude.

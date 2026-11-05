@@ -66,8 +66,15 @@ ggf-menu/build-venv/
 ggf-menu/6.10
 ggf-menu/icon-preview.png
 
-# Per-user runtime state — never ship personal shortcuts/apps/config in distro
+# Per-user runtime state â€” never ship personal shortcuts/apps/config in distro
 ggf-menu/shortcuts.txt
 ggf-menu/installed_apps.txt
 ggf-menu/visualizer_config.json
 ggf-menu/auth_cache.dat
+
+!ggf-menu/GGF-Tray-Release.spec
+/release/build-*/
+/release/GGF-Tray-0.13.0*/
+/release/GGF-Tray-0.14.0/
+/release/GGF-Tray-0.15.0/
+/release/GGF-Tray-0.15.1/
